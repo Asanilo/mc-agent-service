@@ -23,6 +23,7 @@ export interface MineflayerAdapterEvents {
   healthChanged: (health: number, food: number) => void;
   positionChanged: (x: number, y: number, z: number) => void;
   entityGone: (entityId: number) => void;
+  nanDetected: () => void;
   error: (err: { code: string; message: string; retryable: boolean; source: string }) => void;
 }
 
@@ -256,12 +257,13 @@ export class MineflayerAdapter extends EventEmitter {
     bot.on("move", () => {
       const pos = bot.entity.position;
       if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) {
-        // NaN coordinate detected — quarantine: stop pathfinder and emit error
+        // NaN coordinate detected — quarantine: stop pathfinder, cancel active skill, and emit error
         try {
           bot.pathfinder?.stop?.();
         } catch {
           /* ignore */
         }
+        this.emit("nanDetected");
         this.emit("error", {
           code: "NAN_COORDINATE",
           message: `NaN coordinate detected: (${pos.x}, ${pos.y}, ${pos.z})`,

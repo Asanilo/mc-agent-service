@@ -47,7 +47,7 @@ parentPort?.on("message", (raw: unknown) => {
 
   switch (msg.type) {
     case "connect":
-      handleConnect(msg.botConfig);
+      void handleConnect(msg.botConfig);
       break;
     case "disconnect":
       handleDisconnect(msg.reason);
@@ -81,14 +81,21 @@ parentPort?.on("message", (raw: unknown) => {
 
 // ─── Handle connect ─────────────────────────────────────────────────────────
 
-function handleConnect(config: BotConfig): void {
+async function handleConnect(config: BotConfig): Promise<void> {
   botConfig = config;
   const botId = config.id ?? config.name;
 
   try {
     // Destroy old runtime to prevent resource leak on reconnect
     if (runtime) {
-      void runtime.destroy("reconnect").catch(() => {/* best effort */});
+      // Cancel any active skill first
+      runtime.skillExecutor.cancelCurrent("reconnect");
+      try {
+        await runtime.adapter.destroy("reconnect");
+      } catch {
+        // best effort
+      }
+      runtime = null;
     }
 
     runtime = new BotRuntime(botId);

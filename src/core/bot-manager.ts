@@ -209,14 +209,27 @@ export class BotManager {
     this.sendCommand(id, { type: "destroy", reason });
     this.updateStatus(id, "stopping");
 
-    // Wait for worker to exit with timeout
+    // Wait for worker to exit, force-terminate after 5s
     if (record.worker) {
-      await Promise.race([
-        new Promise<void>((resolve) => {
-          this.destroyWaiters.set(id, resolve);
-        }),
-        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
-      ]);
+      const worker = record.worker;
+      const exitPromise = new Promise<void>((resolve) => {
+        this.destroyWaiters.set(id, resolve);
+      });
+      const timeoutPromise = new Promise<void>((resolve) => {
+        setTimeout(() => {
+          // Force-terminate if still alive
+          if (this.destroyWaiters.has(id)) {
+            this.destroyWaiters.delete(id);
+            try {
+              worker.terminate();
+            } catch {
+              // already exited
+            }
+          }
+          resolve();
+        }, 5000);
+      });
+      await Promise.race([exitPromise, timeoutPromise]);
     }
   }
 
@@ -318,19 +331,39 @@ export class BotManager {
         // Unexpected exit — fail any active job
         if (record.currentJobId) {
           const jobId = record.currentJobId;
+          const now = new Date().toISOString();
           record.busy = false;
           record.currentJobId = undefined;
+          const failedJob = {
+            id: jobId,
+            botId: record.id,
+            skill: "",
+            state: "failed" as const,
+            timeoutMs: 0,
+            retry: { maxAttempts: 1, backoffMs: 0, retryOn: [] as string[] },
+            createdAt: now,
+            startedAt: now,
+          };
+          const failedError = { code: "WORKER_CRASH", message: `Worker exited with code ${code}`, retryable: true };
           this.eventBus.emit({
             id: "",
-            ts: "",
+            ts: now,
             type: "job.failed",
             botId: record.id,
             jobId,
             data: {
-              job: { id: jobId, botId: record.id, skill: "", state: "failed" as const, createdAt: "", startedAt: "" },
-              error: { code: "WORKER_CRASH", message: `Worker exited with code ${code}`, retryable: true },
+              job: failedJob,
+              error: failedError,
             },
           } as any);
+          // Notify JobManager directly so it transitions job state and dispatches queued jobs
+          this.jobEventHandler?.({
+            type: "jobFailed",
+            botId: record.id,
+            jobId,
+            job: failedJob,
+            error: failedError,
+          });
         }
 
         // Unexpected exit — classify

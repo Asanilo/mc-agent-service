@@ -236,6 +236,10 @@ export class BotRuntime {
       this.eventCallbacks.error?.(err);
     });
 
+    this.adapter.on("nanDetected", () => {
+      this.skillExecutor.cancelCurrent("nan_coordinate");
+    });
+
     this.adapter.on("healthChanged", () => {
       // StateTracker picks this up via bot events directly
     });
