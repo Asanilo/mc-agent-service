@@ -45,7 +45,7 @@ interface BotRecord {
  * Default worker entry-point. The actual file lives at src/workers/bot-worker.ts
  * (compiled to dist/workers/bot-worker.js). Callers may override via constructor.
  */
-const DEFAULT_WORKER_PATH = new URL("../workers/bot-worker.js", import.meta.url).pathname;
+const DEFAULT_WORKER_PATH = new URL("../bots/worker-entry.js", import.meta.url).pathname;
 
 // ─── BotManager ────────────────────────────────────────────────────────────
 
@@ -62,12 +62,21 @@ export class BotManager {
   private readonly logger: pino.Logger;
   private readonly serverConfig: ServerConfig;
   private readonly workerPath: string;
+  private jobEventHandler: ((event: WorkerEvent) => void) | null = null;
 
   constructor(opts: BotManagerOptions) {
     this.serverConfig = opts.serverConfig;
     this.eventBus = opts.eventBus;
     this.logger = (opts.logger ?? pino()).child({ module: "BotManager" });
     this.workerPath = opts.workerPath ?? DEFAULT_WORKER_PATH;
+  }
+
+  /**
+   * Register a handler that receives every WorkerEvent for job lifecycle wiring.
+   * Called by the integrator (index.ts) to forward events to JobManager.
+   */
+  setJobEventHandler(handler: (event: WorkerEvent) => void): void {
+    this.jobEventHandler = handler;
   }
 
   // ── Create ─────────────────────────────────────────────────────────────
@@ -462,6 +471,9 @@ export class BotManager {
         this.logger.warn({ botId, event: _exhaustive }, "Unknown worker event type");
       }
     }
+
+    // Forward to JobManager for job lifecycle tracking
+    this.jobEventHandler?.(event);
   }
 
   // ── Internal: status management ────────────────────────────────────────

@@ -6,7 +6,8 @@ import { z } from "zod";
 import type { Bot } from "mineflayer";
 import type { SkillDefinition, SkillExecutionContext } from "../bots/skill-executor.js";
 import type { SkillResult } from "../types/skills.js";
-import { goals, Movements } from "mineflayer-pathfinder";
+import pf from "mineflayer-pathfinder";
+const { goals, Movements } = pf;
 import { Vec3 } from "vec3";
 
 // ─── Helper: check cancellation ─────────────────────────────────────────────

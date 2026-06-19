@@ -67,10 +67,7 @@ export class BotStateCache {
       (event) => event.type === "state.changed",
       (event) => {
         if (event.botId && event.data && typeof event.data === "object") {
-          const data = event.data as Record<string, unknown>;
-          if (data["snapshot"] && typeof data["snapshot"] === "object") {
-            this.cache.set(event.botId, data["snapshot"] as BotState);
-          }
+          this.cache.set(event.botId, event.data as BotState);
         }
       },
     );
@@ -393,7 +390,8 @@ export function createRestRouter(opts: RestRouterOptions): Router {
     } catch (err) {
       if (!handleKnownError(res, err)) {
         logger.error({ err }, "Failed to execute skill");
-        sendError(res, 500, "INTERNAL_ERROR", "Failed to execute skill");
+        const msg = err instanceof Error ? err.message : String(err);
+        sendError(res, 500, "INTERNAL_ERROR", `Failed to execute skill: ${msg}`);
       }
     }
   });

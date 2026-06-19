@@ -47,11 +47,28 @@ async function main(): Promise<void> {
   const eventBus = new EventBus();
   const botManager = new BotManager({ serverConfig: config, eventBus, logger });
   const jobManager = new JobManager({ eventBus, botManager, logger });
+  botManager.setJobEventHandler((event) => jobManager.handleWorkerEvent(event));
 
   // 4. Create API-layer services
   const skillRegistry = new SkillRegistry();
   const stateCache = new BotStateCache(eventBus);
   stateCache.start();
+
+  // 4b. Register built-in skills into API SkillRegistry
+  const { allSkillGroups } = await import("./skills/index.js");
+  for (const skill of allSkillGroups) {
+    skillRegistry.register({
+      name: skill.name,
+      description: skill.description,
+      category: skill.category,
+      permissions: skill.permissions,
+      timeoutMs: skill.timeoutMs,
+      busyPolicy: skill.busyPolicy,
+      readOnly: skill.readOnly,
+      parametersSchema: {},
+    });
+  }
+  logger.info({ count: allSkillGroups.length }, "Built-in skills registered");
 
   // 5. Create Express app
   const app = express();

@@ -1,5 +1,6 @@
 import { parentPort } from "node:worker_threads";
 import { BotRuntime } from "./bot-runtime.js";
+import { registerAllSkills } from "../skills/index.js";
 import type { BotConfig } from "../types/bot.js";
 import type {
   WorkerCommand,
@@ -70,6 +71,7 @@ function handleConnect(config: BotConfig): void {
 
   try {
     runtime = new BotRuntime(botId);
+    registerAllSkills(runtime.skillExecutor);
 
     // Wire up runtime events → parentPort
     runtime.on("connected", (host, port) => {
@@ -148,6 +150,10 @@ function handleConnect(config: BotConfig): void {
     });
 
     runtime.on("modeTriggered", (_mode, _reason) => {
+      emitStateUpdate();
+    });
+
+    runtime.on("stateChanged", (_state) => {
       emitStateUpdate();
     });
 

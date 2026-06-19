@@ -68,6 +68,8 @@ export interface JobManagerOptions {
 
 export class JobManager {
   private readonly jobs = new Map<string, Job>();
+  private readonly timeoutHandles = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly jobMeta = new Map<string, { paused?: boolean; attempt?: number }>();
   private readonly botQueues = new Map<string, string[]>(); // botId → queued jobId[]
   private readonly eventBus: EventBus;
   private readonly botManager: BotManager;
@@ -244,7 +246,7 @@ export class JobManager {
 
     if (job.state === "pending") {
       // Simply mark — the job won't be dispatched until resumed
-      (job as any)._paused = true;
+      this.getOrCreateMeta(job.id).paused = true;
       this.logger.info({ jobId: id }, "Pending job paused");
       return { ...job };
     }
@@ -252,7 +254,7 @@ export class JobManager {
     if (job.state === "running") {
       // Cancel the running action but keep the job record in a resumable state
       this.botManager.cancelJob(job.botId, id, "cancel-current", "pause requested");
-      (job as any)._paused = true;
+      this.getOrCreateMeta(job.id).paused = true;
       this.logger.info({ jobId: id }, "Running job pause requested");
       return { ...job };
     }
@@ -270,11 +272,11 @@ export class JobManager {
       throw new JobManagerError("JOB_NOT_FOUND", `Job ${id} not found`);
     }
 
-    if (!(job as any)._paused) {
+    if (!this.jobMeta.get(job.id)?.paused) {
       throw new JobManagerError("JOB_ALREADY_FINISHED", `Job ${id} is not paused`);
     }
 
-    delete (job as any)._paused;
+    this.jobMeta.delete(job.id);
 
     // Re-submit as a new pending dispatch
     if (job.state === "cancelled" || job.state === "completed" || job.state === "failed" || job.state === "timeout") {
@@ -329,13 +331,13 @@ export class JobManager {
         if (!job) return;
 
         // Check retry policy
-        const currentAttempt = ((job as any)._attempt as number) ?? 1;
+        const currentAttempt = this.jobMeta.get(job.id)?.attempt ?? 1;
         if (
           job.retry.maxAttempts > 1 &&
           currentAttempt < job.retry.maxAttempts &&
           this.shouldRetry(job, event.error)
         ) {
-          (job as any)._attempt = currentAttempt + 1;
+          this.getOrCreateMeta(job.id).attempt = currentAttempt + 1;
           job.state = "pending";
           const delay = job.retry.backoffMs * currentAttempt;
           this.logger.info(
@@ -362,7 +364,7 @@ export class JobManager {
     const now = new Date().toISOString();
     job.state = "running";
     job.startedAt = now;
-    (job as any)._attempt = ((job as any)._attempt as number) ?? 1;
+    this.getOrCreateMeta(job.id).attempt = this.jobMeta.get(job.id)?.attempt ?? 1;
 
     this.logger.info({ jobId: job.id, botId: job.botId, skill: job.skill }, "Dispatching job");
 
@@ -393,7 +395,7 @@ export class JobManager {
       }, job.timeoutMs);
 
       // Store handle so we can clear on completion
-      (job as any)._timeoutHandle = timeoutHandle;
+      this.timeoutHandles.set(job.id, timeoutHandle);
     }
   }
 
@@ -412,7 +414,7 @@ export class JobManager {
     }
 
     // Check if paused
-    if ((nextJob as any)._paused) return;
+    if (this.jobMeta.get(nextJob.id)?.paused) return;
 
     this.dispatchJob(nextJob);
   }
@@ -473,12 +475,7 @@ export class JobManager {
     job.state = newStatus;
     if (terminalStatuses.has(newStatus)) {
       job.finishedAt = new Date().toISOString();
-      // Clear timeout
-      const handle = (job as any)._timeoutHandle as ReturnType<typeof setTimeout> | undefined;
-      if (handle) {
-        clearTimeout(handle);
-        delete (job as any)._timeoutHandle;
-      }
+      this.cleanupJob(job.id);
     }
   }
 
@@ -508,6 +505,26 @@ export class JobManager {
         ...extraData,
       },
     } as any);
+  }
+
+  // ── Internal: metadata helpers ─────────────────────────────────────────
+
+  private getOrCreateMeta(jobId: string): { paused?: boolean; attempt?: number } {
+    let meta = this.jobMeta.get(jobId);
+    if (!meta) {
+      meta = {};
+      this.jobMeta.set(jobId, meta);
+    }
+    return meta;
+  }
+
+  private cleanupJob(jobId: string): void {
+    this.jobMeta.delete(jobId);
+    const handle = this.timeoutHandles.get(jobId);
+    if (handle) {
+      clearTimeout(handle);
+      this.timeoutHandles.delete(jobId);
+    }
   }
 
   // ── Internal: validation ───────────────────────────────────────────────

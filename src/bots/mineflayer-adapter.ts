@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import mineflayer from "mineflayer";
-import { pathfinder } from "mineflayer-pathfinder";
+import pf from "mineflayer-pathfinder";
+const { pathfinder } = pf;
 import { plugin as pvp } from "mineflayer-pvp";
 import { plugin as collectblock } from "mineflayer-collectblock";
 import { plugin as autoEat } from "mineflayer-auto-eat";

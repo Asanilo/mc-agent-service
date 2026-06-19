@@ -252,9 +252,8 @@ export class BotRuntime {
     });
 
     // StateTracker state updates → propagate to runtime events
-    this.stateTracker.on("stateUpdate", (_state: BotState) => {
-      // Optionally emit state changes to the event callbacks
-      // This is rate-limited at the worker level
+    this.stateTracker.on("stateUpdate", (state: BotState) => {
+      this.eventCallbacks.stateChanged?.(state);
     });
   }
 
