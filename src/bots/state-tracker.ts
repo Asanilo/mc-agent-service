@@ -121,16 +121,20 @@ export class StateTracker extends EventEmitter {
     const bot = this.bot!;
     const s = this.state;
 
-    // Position
+    // Position — reject NaN to prevent corrupt state
     if (bot.entity?.position) {
       const pos = bot.entity.position;
-      s.position = { x: pos.x, y: pos.y, z: pos.z };
+      if (Number.isFinite(pos.x) && Number.isFinite(pos.y) && Number.isFinite(pos.z)) {
+        s.position = { x: pos.x, y: pos.y, z: pos.z };
+      }
     }
 
-    // Velocity
+    // Velocity — reject NaN
     if (bot.entity?.velocity) {
       const vel = bot.entity.velocity;
-      s.velocity = { x: vel.x, y: vel.y, z: vel.z };
+      if (Number.isFinite(vel.x) && Number.isFinite(vel.y) && Number.isFinite(vel.z)) {
+        s.velocity = { x: vel.x, y: vel.y, z: vel.z };
+      }
     }
 
     // Rotation

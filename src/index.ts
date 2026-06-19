@@ -195,6 +195,13 @@ async function main(): Promise<void> {
     // Stop state cache
     stateCache.stop();
 
+    // Destroy all bots and wait for workers to exit
+    const bots = botManager.listBots();
+    const destroyPromises = bots
+      .filter((b) => b.status !== "destroyed")
+      .map((b) => botManager.destroyBot(b.id, "shutdown").catch(() => {/* best effort */}));
+    await Promise.all(destroyPromises);
+
     // Give in-flight requests time to finish
     const forceExitTimeout = setTimeout(() => {
       logger.warn("Forced exit after timeout");

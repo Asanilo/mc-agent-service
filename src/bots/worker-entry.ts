@@ -2,10 +2,11 @@ import { parentPort } from "node:worker_threads";
 import { BotRuntime } from "./bot-runtime.js";
 import { registerAllSkills } from "../skills/index.js";
 import type { BotConfig } from "../types/bot.js";
-import type {
-  WorkerCommand,
-  WorkerEvent,
-  WorkerSnapshotResponse,
+import {
+  WorkerCommandSchema,
+  type WorkerCommand,
+  type WorkerEvent,
+  type WorkerSnapshotResponse,
 } from "../types/worker.js";
 import type { SkillProgressReport } from "../types/skills.js";
 import type { BotState } from "../types/bot.js";
@@ -26,8 +27,23 @@ let shuttingDown = false;
 
 // ─── Message handler ────────────────────────────────────────────────────────
 
-parentPort?.on("message", (msg: WorkerCommand) => {
+parentPort?.on("message", (raw: unknown) => {
   if (shuttingDown) return;
+
+  const parsed = WorkerCommandSchema.safeParse(raw);
+  if (!parsed.success) {
+    sendEvent({
+      type: "error",
+      botId: botConfig?.id ?? botConfig?.name ?? "unknown",
+      code: "INVALID_COMMAND",
+      message: `Invalid worker command: ${parsed.error.message}`,
+      retryable: false,
+      source: "worker",
+    });
+    return;
+  }
+
+  const msg = parsed.data;
 
   switch (msg.type) {
     case "connect":
@@ -70,6 +86,11 @@ function handleConnect(config: BotConfig): void {
   const botId = config.id ?? config.name;
 
   try {
+    // Destroy old runtime to prevent resource leak on reconnect
+    if (runtime) {
+      void runtime.destroy("reconnect").catch(() => {/* best effort */});
+    }
+
     runtime = new BotRuntime(botId);
     registerAllSkills(runtime.skillExecutor);
 
@@ -233,8 +254,10 @@ async function handleRunSkill(
     return;
   }
 
-  // Run skill asynchronously — results are emitted via event callbacks
-  void runtime.runSkill(skill, params, jobId, timeoutMs);
+  // Run skill and handle errors that escape the runtime's own error handling
+  runtime.runSkill(skill, params, jobId, timeoutMs).catch((err) => {
+    sendWorkerError("RUNSKILL_FAILED", err);
+  });
 }
 
 // ─── Handle cancelJob ───────────────────────────────────────────────────────

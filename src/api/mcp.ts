@@ -11,7 +11,7 @@
  *
  * Tools:
  *   - create_bot, stop_bot, send_chat, get_state,
- *     move_to, follow_player, collect_blocks, craft_item, cancel_job
+ *     move.to_position, move.follow_player, mine.collect_blocks, craft.item, cancel_job
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -281,23 +281,25 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
     },
   );
 
-  /** move_to — Command a bot to move to coordinates */
+  /** move.to_position — Command a bot to move to coordinates */
   mcp.tool(
-    "move_to",
+    "move.to_position",
     "Command a bot to move to specific coordinates",
     {
       botId: z.string().describe("The bot ID"),
-      x: z.number().describe("Target X coordinate"),
-      y: z.number().describe("Target Y coordinate"),
-      z: z.number().describe("Target Z coordinate"),
+      x: z.number().finite().describe("Target X coordinate"),
+      y: z.number().finite().describe("Target Y coordinate"),
+      z: z.number().finite().describe("Target Z coordinate"),
+      minDistance: z.number().min(0).max(64).default(2).describe("Arrival distance threshold"),
     },
     async (args) => {
       try {
         botManager.getBot(args.botId);
-        const job = jobManager.submitJob(args.botId, "move_to", {
+        const job = jobManager.submitJob(args.botId, "move.to_position", {
           x: args.x,
           y: args.y,
           z: args.z,
+          minDistance: args.minDistance,
         });
         return {
           content: [
@@ -321,19 +323,19 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
     },
   );
 
-  /** follow_player — Command a bot to follow a player */
+  /** move.follow_player — Command a bot to follow a player */
   mcp.tool(
-    "follow_player",
+    "move.follow_player",
     "Command a bot to follow a specific player",
     {
       botId: z.string().describe("The bot ID"),
       username: z.string().min(1).describe("Username of the player to follow"),
-      distance: z.number().min(1).max(20).default(3).describe("Following distance in blocks"),
+      distance: z.number().min(0.5).max(64).default(4).describe("Following distance in blocks"),
     },
     async (args) => {
       try {
         botManager.getBot(args.botId);
-        const job = jobManager.submitJob(args.botId, "follow_player", {
+        const job = jobManager.submitJob(args.botId, "move.follow_player", {
           username: args.username,
           distance: args.distance,
         });
@@ -359,22 +361,22 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
     },
   );
 
-  /** collect_blocks — Command a bot to collect specific blocks */
+  /** mine.collect_blocks — Command a bot to collect specific blocks */
   mcp.tool(
-    "collect_blocks",
+    "mine.collect_blocks",
     "Command a bot to collect specific types of blocks in an area",
     {
       botId: z.string().describe("The bot ID"),
       blockType: z.string().min(1).describe("Type of block to collect (e.g. 'oak_log', 'stone')"),
-      count: z.number().int().min(1).max(64).default(1).describe("Number of blocks to collect"),
-      radius: z.number().min(1).max(64).default(32).describe("Search radius in blocks"),
+      num: z.number().int().min(1).default(1).describe("Number of blocks to collect"),
+      radius: z.number().int().min(1).max(128).default(32).describe("Search radius in blocks"),
     },
     async (args) => {
       try {
         botManager.getBot(args.botId);
-        const job = jobManager.submitJob(args.botId, "collect_blocks", {
+        const job = jobManager.submitJob(args.botId, "mine.collect_blocks", {
           blockType: args.blockType,
-          count: args.count,
+          num: args.num,
           radius: args.radius,
         });
         return {
@@ -399,21 +401,21 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
     },
   );
 
-  /** craft_item — Command a bot to craft an item */
+  /** craft.item — Command a bot to craft an item */
   mcp.tool(
-    "craft_item",
+    "craft.item",
     "Command a bot to craft a specific item",
     {
       botId: z.string().describe("The bot ID"),
       itemName: z.string().min(1).describe("Item to craft (e.g. 'crafting_table', 'wooden_pickaxe')"),
-      count: z.number().int().min(1).max(64).default(1).describe("Number of items to craft"),
+      num: z.number().int().min(1).default(1).describe("Number of items to craft"),
     },
     async (args) => {
       try {
         botManager.getBot(args.botId);
-        const job = jobManager.submitJob(args.botId, "craft_item", {
+        const job = jobManager.submitJob(args.botId, "craft.item", {
           itemName: args.itemName,
-          count: args.count,
+          num: args.num,
         });
         return {
           content: [

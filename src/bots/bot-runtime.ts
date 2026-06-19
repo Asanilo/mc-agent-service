@@ -104,14 +104,16 @@ export class BotRuntime {
     timeoutMs?: number,
   ): Promise<SkillResult> {
     if (!this.connected || !this.botConfig) {
+      const error = {
+        code: "BOT_NOT_READY",
+        message: "Bot is not connected",
+        retryable: false,
+      };
+      this.eventCallbacks.jobFailed?.(jobId, error);
       return {
         ok: false,
         status: "failed",
-        error: {
-          code: "BOT_NOT_READY",
-          message: "Bot is not connected",
-          retryable: false,
-        },
+        error,
       };
     }
 

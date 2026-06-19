@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ISODateTimeSchema, Vec3Schema } from "./config.js";
-import { BotSummarySchema, InventorySnapshotSchema, ModeStatusSchema, ServiceErrorObjectSchema, ChatMessageSchema, EntitySummarySchema } from "./bot.js";
+import { BotSummarySchema, BotStateSchema, InventorySnapshotSchema, ModeStatusSchema, ServiceErrorObjectSchema, ChatMessageSchema, EntitySummarySchema } from "./bot.js";
 import { JobSchema, JobProgressSchema, JobErrorSchema, CancellationModeSchema } from "./jobs.js";
 
 // ─── Service Event Envelope ─────────────────────────────────────────────────
@@ -61,22 +61,7 @@ export type ChatReceivedData = z.infer<typeof ChatReceivedDataSchema>;
 export const ChatSentDataSchema = ChatMessageSchema;
 export type ChatSentData = z.infer<typeof ChatSentDataSchema>;
 
-export const JsonPatchOpSchema = z
-  .object({
-    op: z.enum(["add", "remove", "replace", "move", "copy", "test"]),
-    path: z.string(),
-    from: z.string().optional(),
-    value: z.unknown().optional(),
-  })
-  .strict();
-
-export const StateChangedDataSchema = z
-  .object({
-    sequence: z.number().int().nonnegative(),
-    patch: z.array(JsonPatchOpSchema),
-    snapshot: z.unknown().optional(), // BotStateSnapshot — optional full snapshot
-  })
-  .strict();
+export const StateChangedDataSchema = BotStateSchema;
 export type StateChangedData = z.infer<typeof StateChangedDataSchema>;
 
 export const InventoryChangedSlotSchema = z

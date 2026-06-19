@@ -18,7 +18,7 @@ import { Worker } from "node:worker_threads";
 import { randomUUID } from "node:crypto";
 import pino from "pino";
 import type { BotConfig, BotSummary, BotStatus } from "../types/bot.js";
-import type { WorkerCommand, WorkerEvent } from "../types/worker.js";
+import { WorkerEventSchema, type WorkerCommand, type WorkerEvent } from "../types/worker.js";
 import type { ServerConfig } from "../types/config.js";
 import { EventBus } from "./event-bus.js";
 
@@ -62,6 +62,7 @@ export class BotManager {
   private readonly logger: pino.Logger;
   private readonly serverConfig: ServerConfig;
   private readonly workerPath: string;
+  private readonly destroyWaiters = new Map<string, () => void>();
   private jobEventHandler: ((event: WorkerEvent) => void) | null = null;
 
   constructor(opts: BotManagerOptions) {
@@ -196,8 +197,9 @@ export class BotManager {
   /**
    * Destroy a bot permanently. Sends `destroy` to the worker,
    * which will cause the worker to exit after cleanup.
+   * Returns a promise that resolves when the worker exits (or times out).
    */
-  destroyBot(id: string, reason?: string): void {
+  async destroyBot(id: string, reason?: string): Promise<void> {
     const record = this.requireBot(id);
 
     if (record.status === "destroyed") {
@@ -206,6 +208,16 @@ export class BotManager {
 
     this.sendCommand(id, { type: "destroy", reason });
     this.updateStatus(id, "stopping");
+
+    // Wait for worker to exit with timeout
+    if (record.worker) {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          this.destroyWaiters.set(id, resolve);
+        }),
+        new Promise<void>((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    }
   }
 
   /**
@@ -237,7 +249,9 @@ export class BotManager {
    * Used by JobManager to dispatch job execution.
    */
   runSkill(botId: string, jobId: string, skill: string, params: unknown, timeoutMs?: number): void {
-    this.requireBot(botId); // throws if not found
+    const record = this.requireBot(botId);
+    record.busy = true;
+    record.currentJobId = jobId;
     this.sendCommand(botId, { type: "runSkill", jobId, skill, params, timeoutMs });
   }
 
@@ -274,7 +288,7 @@ export class BotManager {
 
     record.worker = worker;
 
-    worker.on("message", (msg: WorkerEvent) => {
+    worker.on("message", (msg: unknown) => {
       this.handleWorkerEvent(record.id, msg);
     });
 
@@ -293,7 +307,32 @@ export class BotManager {
       this.logger.info({ botId: record.id, code }, "Worker exited");
       record.worker = null;
 
+      // Resolve any pending destroy-wait promise
+      const waiter = this.destroyWaiters.get(record.id);
+      if (waiter) {
+        waiter();
+        this.destroyWaiters.delete(record.id);
+      }
+
       if (record.status !== "destroyed" && record.status !== "stopping" && record.status !== "failed") {
+        // Unexpected exit — fail any active job
+        if (record.currentJobId) {
+          const jobId = record.currentJobId;
+          record.busy = false;
+          record.currentJobId = undefined;
+          this.eventBus.emit({
+            id: "",
+            ts: "",
+            type: "job.failed",
+            botId: record.id,
+            jobId,
+            data: {
+              job: { id: jobId, botId: record.id, skill: "", state: "failed" as const, createdAt: "", startedAt: "" },
+              error: { code: "WORKER_CRASH", message: `Worker exited with code ${code}`, retryable: true },
+            },
+          } as any);
+        }
+
         // Unexpected exit — classify
         if (code === 0) {
           // Clean exit but we didn't request it — treat as disconnected
@@ -330,9 +369,17 @@ export class BotManager {
 
   // ── Internal: worker event handling ────────────────────────────────────
 
-  private handleWorkerEvent(botId: string, event: WorkerEvent): void {
+  private handleWorkerEvent(botId: string, raw: unknown): void {
     const record = this.bots.get(botId);
     if (!record) return;
+
+    const parsed = WorkerEventSchema.safeParse(raw);
+    if (!parsed.success) {
+      this.logger.warn({ botId, error: parsed.error.message }, "Invalid worker event received");
+      return;
+    }
+
+    const event = parsed.data;
 
     switch (event.type) {
       case "connected":

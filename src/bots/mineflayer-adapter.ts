@@ -255,6 +255,21 @@ export class MineflayerAdapter extends EventEmitter {
 
     bot.on("move", () => {
       const pos = bot.entity.position;
+      if (!Number.isFinite(pos.x) || !Number.isFinite(pos.y) || !Number.isFinite(pos.z)) {
+        // NaN coordinate detected — quarantine: stop pathfinder and emit error
+        try {
+          bot.pathfinder?.stop?.();
+        } catch {
+          /* ignore */
+        }
+        this.emit("error", {
+          code: "NAN_COORDINATE",
+          message: `NaN coordinate detected: (${pos.x}, ${pos.y}, ${pos.z})`,
+          retryable: true,
+          source: "mineflayer",
+        });
+        return;
+      }
       this.emit("positionChanged", pos.x, pos.y, pos.z);
     });
 
