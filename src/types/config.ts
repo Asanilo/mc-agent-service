@@ -169,6 +169,29 @@ export const WebSocketConfigSchema = z
   .strict();
 export type WebSocketConfig = z.infer<typeof WebSocketConfigSchema>;
 
+// ─── Bot Profile (config-file bot definitions) ─────────────────────────────
+
+export const BotProfileSchema = z
+  .object({
+    id: z.string().regex(/^[A-Za-z0-9_.:-]+$/).optional(),
+    name: z.string().min(1),
+    minecraft: z.object({
+      host: z.string().min(1),
+      port: z.number().int().min(1).max(65535).default(25565),
+      version: z.union([z.literal("auto"), z.string().min(1)]).default("auto"),
+      auth: z.enum(["offline", "microsoft"]).default("offline"),
+      username: z.string().min(1),
+      passwordEnv: z.string().optional(),
+      checkTimeoutIntervalMs: z.number().int().positive().optional(),
+    }).strict(),
+    reconnect: ReconnectPolicySchema.optional(),
+    memory: MemoryConfigSchema.optional(),
+    modes: z.record(z.string(), z.boolean()).optional(),
+    autoStart: z.boolean().default(true),
+  })
+  .strict();
+export type BotProfile = z.infer<typeof BotProfileSchema>;
+
 // ─── Server Config ──────────────────────────────────────────────────────────
 
 export const ServerConfigSchema = z
@@ -186,6 +209,7 @@ export const ServerConfigSchema = z
     logging: LoggingConfigSchema,
     workers: WorkersConfigSchema,
     rateLimit: RateLimitConfigSchema.optional(),
+    bots: z.array(BotProfileSchema).default([]),
   })
   .strict();
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;

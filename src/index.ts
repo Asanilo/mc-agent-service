@@ -128,10 +128,30 @@ async function main(): Promise<void> {
 
   // 9. Start listening
   const { host, port } = config.http;
-  httpServer.listen(port, host, () => {
+  httpServer.listen(port, host, async () => {
     logger.info({ host, port }, "HTTP server listening");
     if (wsManager) {
       logger.info({ path: config.websocket.path }, "WebSocket server active");
+    }
+
+    // 10. Auto-start bots from config file
+    const botProfiles = config.bots ?? [];
+    for (const profile of botProfiles) {
+      if (profile.autoStart === false) continue;
+      try {
+        const botConfig = {
+          id: profile.id ?? profile.name.toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+          name: profile.name,
+          minecraft: profile.minecraft,
+          reconnect: profile.reconnect,
+          memory: profile.memory,
+          modes: profile.modes,
+        };
+        await botManager.createBot(botConfig);
+        logger.info({ botId: botConfig.id, host: profile.minecraft.host }, "Auto-started bot from config");
+      } catch (err) {
+        logger.error({ err, botName: profile.name }, "Failed to auto-start bot");
+      }
     }
   });
 

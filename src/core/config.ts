@@ -53,6 +53,7 @@ const DEFAULTS: ServerConfig = {
     stopGraceMs: 5000,
     maxBots: 8,
   },
+  bots: [],
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
