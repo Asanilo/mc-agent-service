@@ -12,6 +12,27 @@ import { Vec3 } from "vec3";
 
 // ─── Helper: check cancellation ─────────────────────────────────────────────
 
+// ─── Helper: create Movements with creative mode support ──────────────────────
+
+
+
+function createMovements(bot: Bot): InstanceType<typeof Movements> {
+
+  const movements = createMovements(bot);
+
+  // Creative mode: enable flying
+
+  if (bot.game.gameMode === "creative") {
+
+    movements.canFly = true;
+
+  }
+
+  return movements;
+
+}
+
+
 function checkCancelled(ctx: SkillExecutionContext): boolean {
   return ctx.signal.aborted;
 }
@@ -40,7 +61,7 @@ export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> =
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to ${x}, ${y}, ${z}` });
 
-    const movements = new Movements(bot);
+    const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
     const goal = new goals.GoalNear(x, y, z, minDistance);
 
@@ -106,7 +127,7 @@ export const moveToPlayer: SkillDefinition<z.infer<typeof ToPlayerSchema>> = {
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to player ${username}` });
 
     const entity = player.entity;
-    const movements = new Movements(bot);
+    const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
     const goal = new goals.GoalFollow(entity, distance);
 
@@ -170,7 +191,7 @@ export const moveFollowPlayer: SkillDefinition<z.infer<typeof FollowPlayerSchema
     }
 
     const entity = player.entity;
-    const move = new Movements(bot);
+    const move = createMovements(bot);
     move.digCost = 10;
     bot.pathfinder.setMovements(move);
     bot.pathfinder.setGoal(new goals.GoalFollow(entity, distance), true);
@@ -317,7 +338,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
 
     ctx.progress({ current: 0.5, target: 1, unit: "navigation", message: `Moving to ${blockType}` });
 
-    const movements = new Movements(bot);
+    const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
 
     try {
@@ -399,7 +420,7 @@ export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema
       // Move away from this enemy
       const followGoal = new goals.GoalFollow(enemy, distance + 1);
       const invertedGoal = new goals.GoalInvert(followGoal);
-      const movements = new Movements(bot);
+      const movements = createMovements(bot);
       bot.pathfinder.setMovements(movements);
       bot.pathfinder.setGoal(invertedGoal, true);
 
