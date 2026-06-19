@@ -261,7 +261,7 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
 const ToBlockSchema = z.object({
   blockType: z.string().min(1),
   minDistance: z.number().min(0).max(64).default(2),
-  range: z.number().int().min(1).max(512).default(64),
+  radius: z.number().int().min(1).max(512).default(64),
 }).strict();
 
 export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
@@ -275,7 +275,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
   parameters: ToBlockSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockType, minDistance, range } = params;
+    const { blockType, minDistance, radius } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Searching for ${blockType}` });
 
@@ -284,21 +284,21 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
     if (blockType === "water" || blockType === "lava") {
       blocks = bot.findBlocks({
         matching: (block) => block.name === blockType && (block as any).metadata === 0,
-        maxDistance: range,
+        maxDistance: radius,
         count: 1,
       });
       if (blocks.length === 0) {
         // Fall back to any flowing block
         blocks = bot.findBlocks({
           matching: (block) => block.name === blockType,
-          maxDistance: range,
+          maxDistance: radius,
           count: 1,
         });
       }
     } else {
       blocks = bot.findBlocks({
         matching: (block) => block.name === blockType,
-        maxDistance: range,
+        maxDistance: radius,
         count: 1,
       });
     }
@@ -307,7 +307,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
       return {
         ok: false,
         status: "failed",
-        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${range} blocks`, retryable: true },
+        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${radius} blocks`, retryable: true },
       };
     }
 
