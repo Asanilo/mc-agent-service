@@ -59,6 +59,16 @@ export const WorkerGetSnapshotCommandSchema = z
   })
   .strict();
 
+export const WorkerToggleModeCommandSchema = z
+  .object({
+    type: z.literal("toggleMode"),
+    modeName: z.string(),
+    enabled: z.boolean().optional(),
+    paused: z.boolean().optional(),
+    reason: z.string().optional(),
+  })
+  .strict();
+
 export const WorkerCommandSchema = z.discriminatedUnion("type", [
   WorkerConnectCommandSchema,
   WorkerDisconnectCommandSchema,
@@ -67,6 +77,7 @@ export const WorkerCommandSchema = z.discriminatedUnion("type", [
   WorkerCancelJobCommandSchema,
   WorkerSendChatCommandSchema,
   WorkerGetSnapshotCommandSchema,
+  WorkerToggleModeCommandSchema,
 ]);
 export type WorkerCommand = z.infer<typeof WorkerCommandSchema>;
 

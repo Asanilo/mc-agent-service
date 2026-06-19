@@ -285,6 +285,14 @@ export class BotManager {
   }
 
   /**
+   * Send a toggleMode command to a bot's worker.
+   */
+  toggleMode(botId: string, modeName: string, enabled?: boolean, paused?: boolean, reason?: string): void {
+    this.requireBot(botId);
+    this.sendCommand(botId, { type: "toggleMode", modeName, enabled, paused, reason });
+  }
+
+  /**
    * Request a full state snapshot from a bot's worker.
    */
   requestSnapshot(botId: string, requestId: string): void {

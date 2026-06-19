@@ -23,6 +23,7 @@ import type { BotManager } from "../core/bot-manager.js";
 import type { JobManager } from "../core/job-manager.js";
 import type { SkillRegistry, BotStateCache } from "./rest.js";
 import type { ServerConfig } from "../types/config.js";
+import { checkMcpAuth } from "./auth.js";
 
 // ─── Dependencies ────────────────────────────────────────────────────────────
 
@@ -123,6 +124,77 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
           },
         ],
       };
+    },
+  );
+
+  /** minecraft://bots/{botId}/inventory — bot inventory snapshot */
+  mcp.resource(
+    "bot-inventory",
+    "minecraft://bots/{botId}/inventory",
+    { description: "Inventory snapshot for a specific bot", mimeType: "application/json" },
+    async (uri: URL) => {
+      const pathParts = uri.pathname.split("/").filter(Boolean);
+      const botId = pathParts[1] ?? "";
+
+      try {
+        botManager.getBot(botId);
+      } catch {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify({ error: `Bot "${botId}" not found` }),
+            },
+          ],
+        };
+      }
+
+      const state = stateCache.get(botId);
+      const inventory = state?.inventory ?? null;
+      return {
+        contents: [
+          {
+            uri: uri.href,
+            mimeType: "application/json",
+            text: JSON.stringify({ inventory }),
+          },
+        ],
+      };
+    },
+  );
+
+  /** minecraft://jobs/{jobId} — job status */
+  mcp.resource(
+    "job",
+    "minecraft://jobs/{jobId}",
+    { description: "Job status and details", mimeType: "application/json" },
+    async (uri: URL) => {
+      const pathParts = uri.pathname.split("/").filter(Boolean);
+      const jobId = pathParts[1] ?? "";
+
+      try {
+        const job = jobManager.getJob(jobId);
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify({ job }),
+            },
+          ],
+        };
+      } catch {
+        return {
+          contents: [
+            {
+              uri: uri.href,
+              mimeType: "application/json",
+              text: JSON.stringify({ error: `Job "${jobId}" not found` }),
+            },
+          ],
+        };
+      }
     },
   );
 
@@ -292,6 +364,7 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
       z: z.number().finite().describe("Target Z coordinate"),
       minDistance: z.number().min(0).max(64).default(2).describe("Arrival distance threshold"),
     },
+
     async (args) => {
       try {
         botManager.getBot(args.botId);

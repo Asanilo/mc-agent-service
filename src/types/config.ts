@@ -67,9 +67,39 @@ export type StorageConfig = z.infer<typeof StorageConfigSchema>;
 export const RateLimitConfigSchema = z
   .object({
     enabled: z.boolean(),
-    maxRequestsPerMinute: z.number().int().positive(),
-    maxSkillInvocationsPerMinute: z.number().int().positive(),
-    maxChatMessagesPerMinute: z.number().int().positive(),
+    rest: z
+      .object({
+        readPerMinute: z.number().int().positive().default(600),
+        mutatePerMinute: z.number().int().positive().default(120),
+      })
+      .strict()
+      .default({ readPerMinute: 600, mutatePerMinute: 120 }),
+    jobs: z
+      .object({
+        createPerMinute: z.number().int().positive().default(60),
+      })
+      .strict()
+      .default({ createPerMinute: 60 }),
+    chat: z
+      .object({
+        messagesPerMinutePerBot: z.number().int().positive().default(20),
+      })
+      .strict()
+      .default({ messagesPerMinutePerBot: 20 }),
+    websocket: z
+      .object({
+        clientMessagesPerMinute: z.number().int().positive().default(120),
+        maxConnections: z.number().int().positive().default(20),
+      })
+      .strict()
+      .optional(),
+    mcp: z
+      .object({
+        toolCallsPerMinute: z.number().int().positive().default(120),
+        mutatingToolCallsPerMinute: z.number().int().positive().default(60),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type RateLimitConfig = z.infer<typeof RateLimitConfigSchema>;

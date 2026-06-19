@@ -25,6 +25,9 @@ import {
   startMcpTransport,
   type McpTransportHandle,
 } from "./api/index.js";
+import { createAuthMiddleware } from "./api/auth.js";
+import { createRestRateLimitMiddleware, createChatRateLimitMiddleware } from "./api/rate-limit.js";
+import { zodSchemaToJsonSchema } from "./api/zod-to-json-schema.js";
 
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
@@ -54,7 +57,7 @@ async function main(): Promise<void> {
   const stateCache = new BotStateCache(eventBus);
   stateCache.start();
 
-  // 4b. Register built-in skills into API SkillRegistry
+  // 4b. Register built-in skills into API SkillRegistry with real parameter schemas
   const { allSkillGroups } = await import("./skills/index.js");
   for (const skill of allSkillGroups) {
     skillRegistry.register({
@@ -65,7 +68,7 @@ async function main(): Promise<void> {
       timeoutMs: skill.timeoutMs,
       busyPolicy: skill.busyPolicy,
       readOnly: skill.readOnly,
-      parametersSchema: {},
+      parametersSchema: zodSchemaToJsonSchema(skill.parameters as any),
     });
   }
   logger.info({ count: allSkillGroups.length }, "Built-in skills registered");
@@ -74,10 +77,20 @@ async function main(): Promise<void> {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
 
-  // Health check
+  // Health check (before auth — always accessible)
   app.get("/health", (_req, res) => {
     res.json({ status: "ok", uptime: process.uptime() });
   });
+
+  // Auth middleware (applied to all /api routes and REST endpoints)
+  const authMiddleware = createAuthMiddleware(config.auth);
+  app.use("/", authMiddleware);
+
+  // Rate limiting middleware
+  if (config.rateLimit) {
+    const rateLimitMiddleware = createRestRateLimitMiddleware(config.rateLimit);
+    app.use("/", rateLimitMiddleware);
+  }
 
   // Mount REST API
   const restRouter = createRestRouter({
@@ -87,6 +100,7 @@ async function main(): Promise<void> {
     skillRegistry,
     stateCache,
     logger,
+    rateLimitConfig: config.rateLimit,
   });
   app.use("/", restRouter);
 
@@ -107,7 +121,7 @@ async function main(): Promise<void> {
   // 7. Attach WebSocket server
   let wsManager: WsManager | null = null;
   if (config.websocket.enabled) {
-    wsManager = new WsManager({ eventBus, logger });
+    wsManager = new WsManager({ eventBus, logger, authConfig: config.auth });
     wsManager.attachToServer(httpServer, config.websocket.path);
   }
 

@@ -20,9 +20,12 @@ import {
   CancelJobRequestSchema,
   SendChatRequestSchema,
   ListJobsQuerySchema,
+  LookRequestSchema,
   type ErrorResponse,
   type ErrorCode,
 } from "../types/api.js";
+import type { RateLimitConfig } from "../types/config.js";
+import { createChatRateLimitMiddleware } from "./rate-limit.js";
 
 // ─── Skill Registry (control-plane skill definitions) ────────────────────────
 
@@ -151,12 +154,18 @@ export interface RestRouterOptions {
   skillRegistry: SkillRegistry;
   stateCache: BotStateCache;
   logger?: pino.Logger;
+  rateLimitConfig?: RateLimitConfig;
 }
 
 export function createRestRouter(opts: RestRouterOptions): Router {
   const { botManager, jobManager, skillRegistry, stateCache } = opts;
   const logger = (opts.logger ?? pino()).child({ module: "REST" });
   const router = Router();
+
+  // Chat rate limit middleware (applied per-bot)
+  const chatRateLimit = opts.rateLimitConfig
+    ? createChatRateLimitMiddleware(opts.rateLimitConfig)
+    : null;
 
   function handleKnownError(res: Response, err: unknown): boolean {
     if (err instanceof Error && "code" in err) {
@@ -357,6 +366,73 @@ export function createRestRouter(opts: RestRouterOptions): Router {
     }
   });
 
+  /** GET /bots/:botId/position — Bot position, velocity, rotation */
+  router.get("/bots/:botId/position", (req: Request, res: Response) => {
+    const botId = param(req, "botId");
+    try {
+      botManager.getBot(botId);
+
+      const state = stateCache.get(botId);
+      if (!state) {
+        sendError(res, 503, "SNAPSHOT_UNAVAILABLE", "State snapshot not yet available for this bot");
+        return;
+      }
+      res.json({
+        botId,
+        position: state.position,
+        velocity: state.velocity,
+        rotation: state.rotation,
+        dimension: state.dimension,
+        updatedAt: state.updatedAt,
+      });
+    } catch (err) {
+      if (!handleKnownError(res, err)) {
+        logger.error({ err }, "Failed to get bot position");
+        sendError(res, 500, "INTERNAL_ERROR", "Failed to get bot position");
+      }
+    }
+  });
+
+  /** POST /bots/:botId/look — Look at entity or position */
+  router.post("/bots/:botId/look", (req: Request, res: Response) => {
+    const botId = param(req, "botId");
+
+    const parsed = LookRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendError(res, 400, "VALIDATION_FAILED", "Invalid request body", parsed.error.issues);
+      return;
+    }
+
+    try {
+      botManager.getBot(botId);
+
+      const state = stateCache.get(botId);
+      if (!state) {
+        sendError(res, 503, "SNAPSHOT_UNAVAILABLE", "Bot state not yet available");
+        return;
+      }
+
+      // Submit a look skill job via the worker
+      const target = parsed.data.target;
+      const job = jobManager.submitJob(botId, "move.look", {
+        target,
+        force: parsed.data.force,
+      });
+
+      res.json({
+        botId,
+        looked: true,
+        rotation: state.rotation,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      if (!handleKnownError(res, err)) {
+        logger.error({ err }, "Failed to look at target");
+        sendError(res, 500, "INTERNAL_ERROR", "Failed to look at target");
+      }
+    }
+  });
+
   // ════════════════════════════════════════════════════════════════════════
   //  SKILL EXECUTION
   // ════════════════════════════════════════════════════════════════════════
@@ -440,14 +516,20 @@ export function createRestRouter(opts: RestRouterOptions): Router {
         return;
       }
 
-      const newEnabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : !mode.enabled;
+      const newEnabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : mode.enabled;
+      const newPaused = typeof req.body?.paused === "boolean" ? req.body.paused : mode.paused;
 
-      logger.info({ botId, modeName, enabled: newEnabled }, "Mode toggle requested");
+      // Send mode toggle to worker via BotManager
+      botManager.toggleMode(botId, modeName, newEnabled, newPaused, req.body?.reason);
+
+      logger.info({ botId, modeName, enabled: newEnabled, paused: newPaused }, "Mode toggle requested");
 
       res.json({
+        botId,
         mode: {
           ...mode,
           enabled: newEnabled,
+          paused: newPaused,
         },
       });
     } catch (err) {
@@ -554,7 +636,8 @@ export function createRestRouter(opts: RestRouterOptions): Router {
   // ════════════════════════════════════════════════════════════════════════
 
   /** POST /bots/:botId/chat — Send chat message */
-  router.post("/bots/:botId/chat", (req: Request, res: Response) => {
+  const chatHandlers = chatRateLimit ? [chatRateLimit] : [];
+  router.post("/bots/:botId/chat", ...chatHandlers, (req: Request, res: Response) => {
     const botId = param(req, "botId");
 
     const parsed = SendChatRequestSchema.safeParse(req.body);

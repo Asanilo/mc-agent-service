@@ -12,6 +12,8 @@ import { WebSocketServer, WebSocket, type RawData } from "ws";
 import pino from "pino";
 import type { EventBus } from "../core/event-bus.js";
 import type { ServiceEvent } from "../types/events.js";
+import type { AuthConfig } from "../types/config.js";
+import { checkWsAuth } from "./auth.js";
 
 // ─── Client state ────────────────────────────────────────────────────────────
 
@@ -60,12 +62,14 @@ function parseClientMessage(raw: RawData): ClientMessage | null {
 export interface WsManagerOptions {
   eventBus: EventBus;
   logger?: pino.Logger;
+  authConfig?: AuthConfig;
 }
 
 export class WsManager {
   private readonly clients = new Map<string, WsClient>();
   private readonly eventBus: EventBus;
   private readonly logger: pino.Logger;
+  private readonly authConfig: AuthConfig | undefined;
   private wss: WebSocketServer | null = null;
   private eventSubscription: { id: string } | null = null;
   private pingInterval: ReturnType<typeof setInterval> | null = null;
@@ -74,6 +78,7 @@ export class WsManager {
   constructor(opts: WsManagerOptions) {
     this.eventBus = opts.eventBus;
     this.logger = (opts.logger ?? pino()).child({ module: "WebSocket" });
+    this.authConfig = opts.authConfig;
   }
 
   /**
@@ -91,6 +96,21 @@ export class WsManager {
       // Only handle our WS path
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       if (url.pathname !== path) return;
+
+      // Auth check
+      if (this.authConfig && this.authConfig.mode !== "none") {
+        const authError = checkWsAuth(this.authConfig, request.headers as Record<string, string | string[] | undefined>, url.searchParams);
+        if (authError) {
+          const errorPayload = JSON.stringify({
+            error: { code: authError.code, message: authError.message },
+          });
+          sock.write(
+            `HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(errorPayload)}\r\n\r\n${errorPayload}`,
+          );
+          sock.destroy();
+          return;
+        }
+      }
 
       this.wss!.handleUpgrade(request, sock, buf, (ws) => {
         this.wss!.emit("connection", ws, request);

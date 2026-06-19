@@ -235,6 +235,20 @@ export const SendChatRequestSchema = z
   .strict();
 export type SendChatRequest = z.infer<typeof SendChatRequestSchema>;
 
+// ─── POST /bots/{id}/look — Look At Target ─────────────────────────────────
+
+export const LookRequestSchema = z
+  .object({
+    target: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("position"), position: z.object({ x: z.number(), y: z.number(), z: z.number() }).strict() }).strict(),
+      z.object({ type: z.literal("entity"), entityId: z.union([z.number().int(), z.string()]) }).strict(),
+      z.object({ type: z.literal("player"), username: z.string().min(1) }).strict(),
+    ]),
+    force: z.boolean().default(true),
+  })
+  .strict();
+export type LookRequest = z.infer<typeof LookRequestSchema>;
+
 export const SendChatSyncResponseSchema = z
   .object({
     sent: z.boolean(),
