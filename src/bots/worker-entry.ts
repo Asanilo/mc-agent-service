@@ -379,7 +379,7 @@ function buildStubJob(
     skill: "",
     params: undefined,
     state,
-    timeoutMs: 0,
+    timeoutMs: 1,
     retry: { maxAttempts: 1, backoffMs: 0, retryOn: [] },
     createdAt: now,
     startedAt: now,

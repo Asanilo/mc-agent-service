@@ -490,6 +490,7 @@ export class BotManager {
       case "jobComplete":
         record.busy = false;
         record.currentJobId = undefined;
+        this.jobEventHandler?.(event);
         this.eventBus.emit({
           id: "",
           ts: "",
@@ -503,6 +504,7 @@ export class BotManager {
       case "jobFailed":
         record.busy = false;
         record.currentJobId = undefined;
+        this.jobEventHandler?.(event);
         this.eventBus.emit({
           id: "",
           ts: "",
