@@ -10,7 +10,7 @@ import { Vec3 } from "vec3";
 import pf from "mineflayer-pathfinder";
 
 const { Movements, goals } = pf;
-const { GoalFollow, GoalNear } = goals;
+const { GoalFollow, GoalNear, GoalInvert } = goals;
 
 // ─── Helper: check cancellation ─────────────────────────────────────────────
 
@@ -479,12 +479,143 @@ export const inventoryTakeFromChest: SkillDefinition<z.infer<typeof TakeFromChes
   },
 };
 
+// ─── inventory.give_to_player ──────────────────────────────────────────────
+
+const GiveToPlayerSchema = z.object({
+  playerName: z.string().min(1),
+  itemName: z.string().min(1),
+  num: z.number().int().min(1).default(1),
+}).strict();
+
+export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerSchema>> = {
+  name: "inventory.give_to_player",
+  description: "Give items to a specific player.",
+  category: "inventory",
+  permissions: ["movement", "inventory", "entity.interact"],
+  timeoutMs: 30000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: GiveToPlayerSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { playerName, itemName, num } = params;
+
+    // Cannot give to self
+    if (bot.username === playerName) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "VALIDATION_FAILED", message: "Cannot give items to yourself", retryable: false },
+      };
+    }
+
+    // Check if we have the item
+    const item = bot.inventory.findInventoryItem(bot.registry.itemsByName[itemName]?.id ?? -1, null, false);
+    if (!item) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "MISSING_ITEM", message: `You do not have any ${itemName}`, retryable: false },
+      };
+    }
+
+    // Find the player
+    const player = bot.players[playerName];
+    if (!player || !player.entity) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "TARGET_NOT_FOUND", message: `Player "${playerName}" not found or not loaded`, retryable: true },
+      };
+    }
+
+    const playerEntity = player.entity;
+
+    ctx.progress({ current: 0, target: 3, unit: "steps", message: `Moving to ${playerName}` });
+
+    // Navigate to player
+    const movements = new Movements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    try {
+      await bot.pathfinder.goto(new GoalFollow(playerEntity, 3));
+    } catch (err: unknown) {
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Movement cancelled" };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "PATH_NOT_FOUND", message: `Failed to reach player: ${msg}`, retryable: true },
+      };
+    }
+
+    ctx.progress({ current: 1, target: 3, unit: "steps", message: "Dropping items" });
+
+    // If too close, back up a bit
+    if (bot.entity.position.distanceTo(playerEntity.position) < 2) {
+      const tooCloseGoal = new GoalInvert(new GoalFollow(playerEntity, 2));
+      try {
+        await bot.pathfinder.goto(tooCloseGoal);
+      } catch {
+        // Ignore
+      }
+    }
+
+    // Look at player and toss items
+    await bot.lookAt(playerEntity.position);
+
+    let given = 0;
+    const toGive = Math.min(num, item.count);
+
+    try {
+      await bot.toss(item.type, null, toGive);
+      given = toGive;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "MINEFLAYER_ERROR", message: `Failed to toss items: ${msg}`, retryable: true },
+      };
+    }
+
+    ctx.progress({ current: 2, target: 3, unit: "steps", message: "Waiting for pickup" });
+
+    // Wait briefly for the player to pick up
+    let received = false;
+    const onCollect = (collector: any, _collected: any) => {
+      if (collector.username === playerName) {
+        received = true;
+      }
+    };
+    bot.once("playerCollect", onCollect);
+
+    const start = Date.now();
+    while (!received && !checkCancelled(ctx) && Date.now() - start < 3000) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    bot.removeListener("playerCollect", onCollect);
+
+    ctx.progress({ current: 3, target: 3, unit: "steps", message: "Done" });
+
+    return {
+      ok: true,
+      status: "success",
+      data: { given: true, itemName, username: playerName, count: given },
+      message: `Gave ${given} ${itemName} to ${playerName}`,
+    };
+  },
+};
+
 // ─── Export all inventory skills ─────────────────────────────────────────────
 
 export const inventorySkills = [
   inventoryEquip,
   inventoryDiscard,
   inventoryPickupNearby,
+  inventoryGiveToPlayer,
   inventoryViewChest,
   inventoryPutInChest,
   inventoryTakeFromChest,

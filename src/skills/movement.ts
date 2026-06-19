@@ -256,11 +256,183 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
   },
 };
 
+// ─── move.to_block ─────────────────────────────────────────────────────────
+
+const ToBlockSchema = z.object({
+  blockType: z.string().min(1),
+  minDistance: z.number().min(0).max(64).default(2),
+  range: z.number().int().min(1).max(512).default(64),
+}).strict();
+
+export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
+  name: "move.to_block",
+  description: "Find the nearest matching block and navigate near it.",
+  category: "movement",
+  permissions: ["movement"],
+  timeoutMs: 60000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: ToBlockSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { blockType, minDistance, range } = params;
+
+    ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Searching for ${blockType}` });
+
+    // Handle liquid source blocks specially
+    let blocks: import("vec3").Vec3[];
+    if (blockType === "water" || blockType === "lava") {
+      blocks = bot.findBlocks({
+        matching: (block) => block.name === blockType && (block as any).metadata === 0,
+        maxDistance: range,
+        count: 1,
+      });
+      if (blocks.length === 0) {
+        // Fall back to any flowing block
+        blocks = bot.findBlocks({
+          matching: (block) => block.name === blockType,
+          maxDistance: range,
+          count: 1,
+        });
+      }
+    } else {
+      blocks = bot.findBlocks({
+        matching: (block) => block.name === blockType,
+        maxDistance: range,
+        count: 1,
+      });
+    }
+
+    if (blocks.length === 0) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${range} blocks`, retryable: true },
+      };
+    }
+
+    const blockPos = blocks[0]!;
+    const block = bot.blockAt(blockPos);
+    ctx.log(`Found ${blockType} at ${blockPos.x}, ${blockPos.y}, ${blockPos.z}`);
+
+    ctx.progress({ current: 0.5, target: 1, unit: "navigation", message: `Moving to ${blockType}` });
+
+    const movements = new Movements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    try {
+      await bot.pathfinder.goto(new goals.GoalNear(blockPos.x, blockPos.y, blockPos.z, minDistance));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Movement cancelled" };
+      }
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "PATH_NOT_FOUND", message: `Pathfinding failed: ${msg}`, retryable: true },
+      };
+    }
+
+    const pos = bot.entity.position;
+    const distance = pos.distanceTo(blockPos);
+    ctx.progress({ current: 1, target: 1, unit: "navigation", message: "Arrived" });
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        reached: distance <= minDistance + 1,
+        block: { name: block?.name ?? blockType, position: { x: blockPos.x, y: blockPos.y, z: blockPos.z } },
+        distance: Math.round(distance * 10) / 10,
+      },
+    };
+  },
+};
+
+// ─── move.avoid_enemies ────────────────────────────────────────────────────
+
+const AvoidEnemiesSchema = z.object({
+  distance: z.number().min(1).max(128).default(16),
+}).strict();
+
+export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema>> = {
+  name: "move.avoid_enemies",
+  description: "Move away from nearby hostile mobs until clear.",
+  category: "movement",
+  permissions: ["movement", "combat"],
+  timeoutMs: 60000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: AvoidEnemiesSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { distance } = params;
+
+    const HOSTILE_NAMES = new Set([
+      "zombie", "zombie_villager", "husk", "drowned",
+      "skeleton", "stray", "wither_skeleton",
+      "creeper", "spider", "cave_spider",
+      "enderman", "witch", "blaze", "ghast",
+      "slime", "magma_cube", "phantom",
+      "piglin", "piglin_brute", "zombified_piglin",
+      "hoglin", "zoglin", "warden",
+      "guardian", "elder_guardian",
+      "vindicator", "evoker", "pillager", "ravager",
+      "vex", "shulker",
+    ]);
+
+    const findHostile = () =>
+      bot.nearestEntity(
+        (entity) => entity.name !== undefined && HOSTILE_NAMES.has(entity.name) &&
+          bot.entity.position.distanceTo(entity.position) < distance
+      );
+
+    ctx.progress({ current: 0, target: 1, unit: "fleeing", message: "Avoiding enemies" });
+
+    let enemy = findHostile();
+    let avoided = false;
+
+    while (enemy) {
+      if (checkCancelled(ctx)) break;
+
+      // Move away from this enemy
+      const followGoal = new goals.GoalFollow(enemy, distance + 1);
+      const invertedGoal = new goals.GoalInvert(followGoal);
+      const movements = new Movements(bot);
+      bot.pathfinder.setMovements(movements);
+      bot.pathfinder.setGoal(invertedGoal, true);
+
+      // Wait a bit for movement
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      avoided = true;
+
+      // Check for next enemy
+      enemy = findHostile();
+    }
+
+    bot.pathfinder.stop();
+
+    const enemiesRemaining = Object.values(bot.entities).filter(
+      (e) => e.name !== undefined && HOSTILE_NAMES.has(e.name) &&
+        bot.entity.position.distanceTo(e.position) < distance
+    ).length;
+
+    return {
+      ok: true,
+      status: "success",
+      data: { avoided, distance, enemiesRemaining },
+    };
+  },
+};
+
 // ─── Export all movement skills ─────────────────────────────────────────────
 
 export const movementSkills = [
   moveToPosition,
+  moveToBlock,
   moveToPlayer,
   moveFollowPlayer,
   moveStay,
+  moveAvoidEnemies,
 ];

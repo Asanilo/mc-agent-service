@@ -228,9 +228,195 @@ export const mineBreakBlockAt: SkillDefinition<z.infer<typeof BreakBlockAtSchema
   },
 };
 
+// ─── mine.dig_down ─────────────────────────────────────────────────────────
+
+const DigDownSchema = z.object({
+  targetY: z.number().int().min(-64).max(320),
+}).strict();
+
+export const mineDigDown: SkillDefinition<z.infer<typeof DigDownSchema>> = {
+  name: "mine.dig_down",
+  description: "Dig straight down to a target Y level.",
+  category: "mining",
+  permissions: ["movement", "block.break", "inventory"],
+  timeoutMs: 120000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: DigDownSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { targetY } = params;
+
+    const startY = Math.floor(bot.entity.position.y);
+    if (targetY >= startY) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "VALIDATION_FAILED", message: `Target Y ${targetY} is not below current Y ${startY}`, retryable: false },
+      };
+    }
+
+    const totalBlocks = startY - targetY;
+    ctx.progress({ current: 0, target: totalBlocks, unit: "blocks", message: `Digging down to Y=${targetY}` });
+
+    let dug = 0;
+    let stoppedReason: string | undefined;
+
+    for (let y = startY - 1; y >= targetY; y--) {
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Digging cancelled" };
+      }
+
+      const pos = bot.entity.position;
+      const blockBelow = bot.blockAt(new Vec3(Math.floor(pos.x), y, Math.floor(pos.z)));
+      const blockUnderneath = bot.blockAt(new Vec3(Math.floor(pos.x), y - 1, Math.floor(pos.z)));
+
+      if (!blockBelow || !blockUnderneath) {
+        stoppedReason = "Reached world boundary";
+        break;
+      }
+
+      // Safety: check for liquids
+      if (blockBelow.name === "lava" || blockBelow.name === "water" ||
+          blockUnderneath.name === "lava" || blockUnderneath.name === "water") {
+        stoppedReason = `Reached ${blockBelow.name === "lava" || blockBelow.name === "water" ? blockBelow.name : blockUnderneath.name}`;
+        break;
+      }
+
+      // Safety: check for dangerous drops (4+ blocks of air below)
+      let airBlocks = 0;
+      let checkBlock: ReturnType<typeof bot.blockAt> = blockUnderneath;
+      for (let j = 0; j < 4; j++) {
+        if (!checkBlock || (checkBlock.name !== "air" && checkBlock.name !== "cave_air")) break;
+        airBlocks++;
+        checkBlock = bot.blockAt(checkBlock.position.offset(0, -1, 0));
+      }
+      if (airBlocks >= 4) {
+        stoppedReason = "Unsafe drop below next block";
+        break;
+      }
+
+      // Skip air blocks
+      if (blockBelow.name === "air" || blockBelow.name === "cave_air") {
+        dug++;
+        ctx.progress({ current: dug, target: totalBlocks, unit: "blocks" });
+        continue;
+      }
+
+      // Navigate to position above target
+      if (bot.entity.position.distanceTo(new Vec3(Math.floor(pos.x), y + 1, Math.floor(pos.z))) > 4) {
+        const movements = new Movements(bot);
+        bot.pathfinder.setMovements(movements);
+        try {
+          await bot.pathfinder.goto(new goals.GoalNear(Math.floor(pos.x), y + 1, Math.floor(pos.z), 4));
+        } catch {
+          // May fail if path is blocked, try to continue
+        }
+      }
+
+      // Dig the block
+      try {
+        await bot.dig(blockBelow);
+        dug++;
+        ctx.progress({ current: dug, target: totalBlocks, unit: "blocks" });
+      } catch (err: unknown) {
+        if (checkCancelled(ctx)) {
+          return { ok: false, status: "cancelled", message: "Digging cancelled" };
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        ctx.log(`Failed to dig block at Y=${y}: ${msg}`);
+        stoppedReason = `Dig failed at Y=${y}`;
+        break;
+      }
+    }
+
+    return {
+      ok: dug > 0,
+      status: "success",
+      data: { dug, requested: totalBlocks, stoppedReason },
+      message: stoppedReason ? `Dug ${dug} blocks, stopped: ${stoppedReason}` : `Dug ${dug} blocks to Y=${targetY}`,
+    };
+  },
+};
+
+// ─── mine.go_to_surface ────────────────────────────────────────────────────
+
+const GoToSurfaceSchema = z.object({}).strict();
+
+export const mineGoToSurface: SkillDefinition<z.infer<typeof GoToSurfaceSchema>> = {
+  name: "mine.go_to_surface",
+  description: "Navigate upward to the surface.",
+  category: "mining",
+  permissions: ["movement"],
+  timeoutMs: 120000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: GoToSurfaceSchema,
+  async run(ctx, _params) {
+    const bot = ctx.bot;
+    const pos = bot.entity.position;
+
+    ctx.progress({ current: 0, target: 1, unit: "navigation", message: "Finding surface" });
+
+    // Scan upward from current position to find the highest non-air block
+    let targetY = -1;
+    for (let y = 360; y > -64; y--) {
+      const block = bot.blockAt(new Vec3(Math.floor(pos.x), y, Math.floor(pos.z)));
+      if (block && block.name !== "air" && block.name !== "cave_air") {
+        targetY = y + 1; // Stand on top of the solid block
+        break;
+      }
+    }
+
+    if (targetY === -1) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "TARGET_NOT_FOUND", message: "Could not find surface", retryable: false },
+      };
+    }
+
+    ctx.log(`Surface found at Y=${targetY}`);
+    ctx.progress({ current: 0.5, target: 1, unit: "navigation", message: `Moving to surface at Y=${targetY}` });
+
+    // Use pathfinder to navigate to the surface position
+    const movements = new Movements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    try {
+      await bot.pathfinder.goto(new goals.GoalNear(Math.floor(pos.x), targetY, Math.floor(pos.z), 0));
+    } catch (err: unknown) {
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Movement cancelled" };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "PATH_NOT_FOUND", message: `Failed to reach surface: ${msg}`, retryable: true },
+      };
+    }
+
+    const finalPos = bot.entity.position;
+    ctx.progress({ current: 1, target: 1, unit: "navigation", message: "Reached surface" });
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        reached: true,
+        targetY,
+        position: { x: Math.round(finalPos.x), y: Math.round(finalPos.y), z: Math.round(finalPos.z) },
+      },
+    };
+  },
+};
+
 // ─── Export all mining skills ────────────────────────────────────────────────
 
 export const miningSkills = [
   mineCollectBlocks,
   mineBreakBlockAt,
+  mineDigDown,
+  mineGoToSurface,
 ];

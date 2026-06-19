@@ -313,9 +313,148 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
   },
 };
 
+// ─── combat.attack_entity ──────────────────────────────────────────────────
+
+const AttackEntitySchema = z.object({
+  entityType: z.string().min(1).optional(),
+  entityId: z.number().int().nonnegative().optional(),
+  range: z.number().min(1).max(64).default(16),
+}).strict().refine((data) => data.entityType !== undefined || data.entityId !== undefined, {
+  message: "Must provide either entityType or entityId",
+});
+
+export const combatAttackEntity: SkillDefinition<z.infer<typeof AttackEntitySchema>> = {
+  name: "combat.attack_entity",
+  description: "Attack a specific entity by ID or type.",
+  category: "combat",
+  permissions: ["movement", "combat", "inventory", "entity.interact"],
+  timeoutMs: 60000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: AttackEntitySchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { entityType, entityId, range } = params;
+
+    let target: Entity | undefined;
+
+    // Find by entity ID first
+    if (entityId !== undefined) {
+      target = bot.entities[entityId];
+      if (!target) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "TARGET_NOT_FOUND", message: `Entity with ID ${entityId} not found`, retryable: true },
+        };
+      }
+    }
+
+    // Find by entity type
+    if (!target && entityType) {
+      const entities = getNearbyEntities(bot, range);
+      target = entities.find((e) => e.name === entityType);
+      if (!target) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "TARGET_NOT_FOUND", message: `No ${entityType} found within ${range} blocks`, retryable: true },
+        };
+      }
+    }
+
+    if (!target) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "TARGET_NOT_FOUND", message: "No target specified or found", retryable: true },
+      };
+    }
+
+    ctx.log(`Attacking ${target.name} (ID: ${target.id}) at distance ${Math.round(bot.entity.position.distanceTo(target.position))}`);
+    ctx.progress({ current: 0, target: 1, unit: "attack", message: `Attacking ${target.name}` });
+
+    await equipBestWeapon(bot);
+
+    // Use PVP plugin if available
+    const pvp = (bot as any).pvp;
+    if (pvp) {
+      pvp.attack(target);
+
+      let timeout = 0;
+      const maxTimeout = 30000;
+      while (timeout < maxTimeout) {
+        if (checkCancelled(ctx)) {
+          pvp.stop();
+          return { ok: false, status: "cancelled", message: "Attack cancelled" };
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        timeout += 500;
+
+        const stillExists = bot.entities[target.id];
+        if (!stillExists) break;
+      }
+
+      pvp.stop();
+
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          attacked: true,
+          killed: !bot.entities[target.id],
+          entity: { name: target.name, id: target.id },
+        },
+      };
+    }
+
+    // Fallback: manual attack loop
+    let attacks = 0;
+    while (attacks < 100) {
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Attack cancelled" };
+      }
+
+      const stillExists = bot.entities[target.id];
+      if (!stillExists) break;
+
+      if (bot.entity.position.distanceTo(target.position) > 4) {
+        const movements = new Movements(bot);
+        bot.pathfinder.setMovements(movements);
+        try {
+          await bot.pathfinder.goto(new GoalFollow(target, 3));
+        } catch {
+          break;
+        }
+      }
+
+      try {
+        await bot.attack(target);
+        attacks++;
+      } catch {
+        break;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        attacked: true,
+        killed: !bot.entities[target.id],
+        entity: { name: target.name, id: target.id },
+      },
+    };
+  },
+};
+
 // ─── Export all combat skills ────────────────────────────────────────────────
 
 export const combatSkills = [
   combatAttackNearest,
+  combatAttackEntity,
   combatDefendSelf,
 ];

@@ -286,11 +286,128 @@ export const observeCraftable: SkillDefinition<z.infer<typeof ObserveCraftableSc
   },
 };
 
+// ─── observe.nearby_blocks ──────────────────────────────────────────────────
+
+const NearbyBlocksSchema = z.object({
+  blockTypes: z.array(z.string().min(1)).optional(),
+  distance: z.number().int().min(1).max(256).default(16),
+  count: z.number().int().min(1).max(10000).default(100),
+}).strict();
+
+export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSchema>> = {
+  name: "observe.nearby_blocks",
+  description: "Get nearby blocks by type.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 10000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: NearbyBlocksSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { blockTypes, distance, count } = params;
+
+    const positions = bot.findBlocks({
+      matching: (block) => {
+        if (block.name === "air" || block.name === "cave_air") return false;
+        if (blockTypes && blockTypes.length > 0) {
+          return blockTypes.includes(block.name);
+        }
+        return true;
+      },
+      maxDistance: distance,
+      count,
+    });
+
+    const botPos = bot.entity.position;
+    const blocks = positions
+      .map((pos) => {
+        const block = bot.blockAt(pos);
+        if (!block) return null;
+        return {
+          name: block.name,
+          position: { x: pos.x, y: pos.y, z: pos.z },
+          distance: Math.round(botPos.distanceTo(pos) * 10) / 10,
+        };
+      })
+      .filter((b): b is NonNullable<typeof b> => b !== null)
+      .sort((a, b) => a.distance - b.distance);
+
+    return {
+      ok: true,
+      status: "success",
+      data: { blocks },
+    };
+  },
+};
+
+// ─── observe.nearby_entities ────────────────────────────────────────────────
+
+const NearbyEntitiesSchema = z.object({
+  entityTypes: z.array(z.string().min(1)).optional(),
+  radius: z.number().int().min(1).max(256).default(16),
+}).strict();
+
+export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitiesSchema>> = {
+  name: "observe.nearby_entities",
+  description: "Get nearby entities by type.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 10000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: NearbyEntitiesSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { entityTypes, radius } = params;
+
+    const botPos = bot.entity.position;
+    const entities: Array<{
+      name: string;
+      id: number;
+      type: string;
+      position: { x: number; y: number; z: number };
+      distance: number;
+    }> = [];
+
+    for (const entity of Object.values(bot.entities)) {
+      if (entity === bot.entity) continue;
+      if (!entity.name) continue;
+
+      const distance = botPos.distanceTo(entity.position);
+      if (distance > radius) continue;
+
+      if (entityTypes && entityTypes.length > 0) {
+        if (!entityTypes.includes(entity.name)) continue;
+      }
+
+      const p = entity.position;
+      entities.push({
+        name: entity.name,
+        id: entity.id,
+        type: entity.type ?? "unknown",
+        position: { x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, z: Math.round(p.z * 10) / 10 },
+        distance: Math.round(distance * 10) / 10,
+      });
+    }
+
+    entities.sort((a, b) => a.distance - b.distance);
+
+    return {
+      ok: true,
+      status: "success",
+      data: { entities },
+    };
+  },
+};
+
 // ─── Export all observation skills ───────────────────────────────────────────
 
 export const observationSkills = [
   observeState,
   observeInventory,
   observeNearby,
+  observeNearbyBlocks,
+  observeNearbyEntities,
   observeCraftable,
 ];
