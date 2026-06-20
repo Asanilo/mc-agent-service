@@ -322,6 +322,9 @@ export class ModeEngine {
  * Priority 100 — highest priority, overrides everything.
  */
 export function createSelfPreservationMode(): ModeDefinition {
+  let lastActionTime = 0;
+  const COOLDOWN_MS = 3000;
+
   return {
     name: "self_preservation",
     description: "Respond to drowning, burning, and damage at low health. Interrupts all actions.",
@@ -331,6 +334,9 @@ export function createSelfPreservationMode(): ModeDefinition {
     interruptsAll: true,
     interruptsSkills: [],
     update: (ctx) => {
+      const now = Date.now();
+      if (now - lastActionTime < COOLDOWN_MS) return;
+
       const bot = ctx.bot;
       const pos = bot.entity.position;
       const block = bot.blockAt(pos);
@@ -438,7 +444,8 @@ export function createUnstuckMode(): ModeDefinition {
   let prevPosition: { x: number; y: number; z: number } | null = null;
   let stuckTime = 0;
   let lastCheck = Date.now();
-  let lastEscalation = 0; // 0=none, 1=jump, 2=random move, 3=dig, 4=interrupt
+  let lastEscalation = 0;
+  let prevHealth = 20;
 
   return {
     name: "unstuck",
@@ -453,6 +460,30 @@ export function createUnstuckMode(): ModeDefinition {
       const pos = bot.entity.position;
       const now = Date.now();
 
+      if (ctx.isIdle) {
+        // Idle: check if taking damage (health dropping = stuck/suffocating/attacked)
+        const healthDiff = prevHealth - bot.health;
+        prevHealth = bot.health;
+
+        if (healthDiff > 0 && bot.health < 15) {
+          // Losing health while idle — try to get free
+          ctx.log(`Taking damage while idle (health: ${bot.health}) — trying to escape!`);
+          bot.setControlState("jump", true);
+          setTimeout(() => bot.setControlState("jump", false), 500);
+          // Try random movement
+          const dir = Math.random() > 0.5 ? "forward" : "back";
+          bot.setControlState(dir, true);
+          setTimeout(() => bot.setControlState(dir, false), 800);
+        }
+
+        prevPosition = null;
+        stuckTime = 0;
+        lastEscalation = 0;
+        lastCheck = now;
+        return;
+      }
+
+      // Job running: check position-based stuck detection
       if (prevPosition) {
         const dx = pos.x - prevPosition.x;
         const dy = pos.y - prevPosition.y;
@@ -474,13 +505,11 @@ export function createUnstuckMode(): ModeDefinition {
 
       // Progressive escalation based on stuck duration
       if (stuckTime > 5 && lastEscalation < 1) {
-        // Level 1: try jumping
         ctx.log("Stuck for 5s — jumping!");
         bot.setControlState("jump", true);
         setTimeout(() => bot.setControlState("jump", false), 500);
         lastEscalation = 1;
       } else if (stuckTime > 10 && lastEscalation < 2) {
-        // Level 2: pick a random direction and move
         ctx.log("Stuck for 10s — trying random movement!");
         const directions = [
           ["forward", "left"],
@@ -497,7 +526,6 @@ export function createUnstuckMode(): ModeDefinition {
         }, 1000);
         lastEscalation = 2;
       } else if (stuckTime > 15 && lastEscalation < 3) {
-        // Level 3: try to break block at bot's position
         ctx.log("Stuck for 15s — trying to break block!");
         const blockAtFeet = bot.blockAt(pos);
         const blockAbove = bot.blockAt(pos.offset(0, 1, 0));
@@ -508,13 +536,10 @@ export function createUnstuckMode(): ModeDefinition {
               ? blockAbove
               : null;
         if (targetBlock) {
-          void bot.dig(targetBlock).catch(() => {
-            /* ignore dig errors */
-          });
+          void bot.dig(targetBlock).catch(() => {});
         }
         lastEscalation = 3;
       } else if (stuckTime > 20) {
-        // Level 4: give up and interrupt
         ctx.log("Cannot get unstuck");
         stuckTime = 0;
         prevPosition = null;
@@ -527,21 +552,27 @@ export function createUnstuckMode(): ModeDefinition {
       stuckTime = 0;
       lastCheck = Date.now();
       lastEscalation = 0;
+      prevHealth = 20;
     },
   };
 }
 
-/**
- * Idle staring: when no job is active, periodically look at nearest entity.
- * Priority 10 — low priority, cosmetic behavior.
- */
+function isHostile(entity: { type?: string; name?: string }): boolean {
+  if (entity.type === "hostile") return true;
+  if (entity.type === "mob" && entity.name !== "iron_golem" && entity.name !== "snow_golem") {
+    return true;
+  }
+  return false;
+}
+
+// ─── Idle Staring Mode ─────────────────────────────────────────────────────
+
 export function createIdleStaringMode(): ModeDefinition {
   let lastLookTime = 0;
-  let nextCooldown = 5000; // randomized 5-10s
 
   return {
     name: "idle_staring",
-    description: "Periodically look at nearest entity when idle.",
+    description: "Look at nearby entities when idle.",
     priority: 10,
     enabled: true,
     permissions: [],
@@ -551,91 +582,57 @@ export function createIdleStaringMode(): ModeDefinition {
       if (!ctx.isIdle) return;
 
       const now = Date.now();
-      if (now - lastLookTime < nextCooldown) return;
+      if (now - lastLookTime < 5000 + Math.random() * 5000) return;
 
       const bot = ctx.bot;
       const pos = bot.entity.position;
 
-      // Find nearest entity within 10 blocks (excluding self)
-      let nearest: Entity | null = null;
-      let nearestDist = Infinity;
+      const entity = Object.values(bot.entities).find((e) => {
+        if (!e?.position || !e.name) return false;
+        return pos.distanceTo(e.position) < 10 && e.name !== bot.username;
+      });
 
-      for (const entity of Object.values(bot.entities)) {
-        if (!entity?.position || entity === bot.entity) continue;
-        const dist = pos.distanceTo(entity.position);
-        if (dist > 10 || dist >= nearestDist) continue;
-        nearest = entity;
-        nearestDist = dist;
-      }
-
-      if (nearest) {
-        // Look at the entity's head level
-        const lookTarget = nearest.position.offset(0, nearest.height, 0);
-        void bot.lookAt(lookTarget);
+      if (entity) {
+        const target = entity.position.offset(0, (entity as any).height ?? 1.6, 0);
+        bot.lookAt(target).catch(() => {});
         lastLookTime = now;
-        // Randomize next cooldown between 5-10 seconds
-        nextCooldown = 5000 + Math.floor(Math.random() * 5000);
       }
-    },
-    onUnpause: () => {
-      lastLookTime = 0;
     },
   };
 }
 
-/**
- * Elbow room: when a player is too close and bot is idle, move away slightly.
- * Priority 5 — lowest priority, only runs when idle.
- */
+// ─── Elbow Room Mode ───────────────────────────────────────────────────────
+
 export function createElbowRoomMode(): ModeDefinition {
-  let lastMoveTime = 0;
+  let lastStepTime = 0;
 
   return {
     name: "elbow_room",
-    description: "Move away when players are too close while idle.",
+    description: "Step back when a player is too close.",
     priority: 5,
     enabled: true,
-    permissions: ["move"],
+    permissions: [],
     interruptsAll: false,
     interruptsSkills: [],
     update: (ctx) => {
       if (!ctx.isIdle) return;
 
       const now = Date.now();
-      if (now - lastMoveTime < 3000) return; // Only trigger every 3 seconds
+      if (now - lastStepTime < 3000) return;
 
       const bot = ctx.bot;
       const pos = bot.entity.position;
 
-      // Check if any player entity is within 1.5 blocks
-      for (const entity of Object.values(bot.entities)) {
-        if (!entity?.position || entity === bot.entity) continue;
-        if (entity.type !== "player") continue;
-        const dist = pos.distanceTo(entity.position);
-        if (dist < 1.5) {
-          ctx.log("Player too close — giving space");
-          bot.setControlState("back", true);
-          // Release after 500ms to take a small step back
-          setTimeout(() => {
-            bot.setControlState("back", false);
-          }, 500);
-          lastMoveTime = now;
-          return;
-        }
+      const player = Object.values(bot.entities).find((e) => {
+        if (!e?.position || e.type !== "player") return false;
+        return pos.distanceTo(e.position) < 1.5;
+      });
+
+      if (player) {
+        bot.setControlState("back", true);
+        setTimeout(() => bot.setControlState("back", false), 500);
+        lastStepTime = now;
       }
     },
-    onUnpause: () => {
-      lastMoveTime = 0;
-    },
   };
-}
-
-// ─── Entity classification helper ───────────────────────────────────────────
-
-function isHostile(entity: { type?: string; name?: string }): boolean {
-  if (entity.type === "hostile") return true;
-  if (entity.type === "mob" && entity.name !== "iron_golem" && entity.name !== "snow_golem") {
-    return true;
-  }
-  return false;
 }
