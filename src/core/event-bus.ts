@@ -47,8 +47,8 @@ export class EventBus {
   emit(event: ServiceEvent): void {
     const stamped: ServiceEvent = {
       ...event,
-      id: event.id ?? this.nextId(),
-      ts: event.ts ?? new Date().toISOString(),
+      id: event.id || this.nextId(),
+      ts: event.ts || new Date().toISOString(),
     } as ServiceEvent;
 
     this.emitter.emit(stamped.type, stamped);

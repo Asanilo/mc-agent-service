@@ -24,6 +24,8 @@ import type { Job } from "../types/jobs.js";
 let runtime: BotRuntime | null = null;
 let botConfig: BotConfig | null = null;
 let shuttingDown = false;
+let skillRunning = false;
+const skillQueue: Array<{ jobId: string; skill: string; params: unknown; timeoutMs?: number }> = [];
 
 // ─── Message handler ────────────────────────────────────────────────────────
 
@@ -66,6 +68,9 @@ parentPort?.on("message", (raw: unknown) => {
       break;
     case "getSnapshot":
       handleGetSnapshot(msg.requestId);
+      break;
+    case "toggleMode":
+      handleToggleMode(msg.modeName, msg.enabled, msg.paused);
       break;
     default:
       sendEvent({
@@ -169,6 +174,18 @@ async function handleConnect(config: BotConfig): Promise<void> {
       emitStateUpdate();
     });
 
+    runtime.on("jobCancelled", (jobId, reason) => {
+      const job = buildStubJob(jobId, "cancelled");
+      sendEvent({
+        type: "jobCancelled",
+        botId,
+        jobId,
+        job,
+        reason,
+      });
+      emitStateUpdate();
+    });
+
     runtime.on("error", (err) => {
       sendEvent({
         type: "error",
@@ -261,10 +278,27 @@ async function handleRunSkill(
     return;
   }
 
+  // Enforce one-primary-action: queue if a skill is already running
+  if (skillRunning) {
+    skillQueue.push({ jobId, skill, params, timeoutMs });
+    return;
+  }
+
+  skillRunning = true;
+
   // Run skill and handle errors that escape the runtime's own error handling
   runtime.runSkill(skill, params, jobId, timeoutMs).catch((err) => {
     sendWorkerError("RUNSKILL_FAILED", err);
+  }).finally(() => {
+    skillRunning = false;
+    drainSkillQueue();
   });
+}
+
+function drainSkillQueue(): void {
+  const next = skillQueue.shift();
+  if (!next) return;
+  void handleRunSkill(next.jobId, next.skill, next.params, next.timeoutMs);
 }
 
 // ─── Handle cancelJob ───────────────────────────────────────────────────────
@@ -307,6 +341,41 @@ function handleSendChat(jobId: string | undefined, message: string): void {
   } catch (err) {
     sendWorkerError("CHAT_FAILED", err);
   }
+}
+
+// ─── Handle toggleMode ──────────────────────────────────────────────────────
+
+function handleToggleMode(
+  modeName: string,
+  enabled?: boolean,
+  paused?: boolean,
+): void {
+  if (!runtime) {
+    sendEvent({
+      type: "error",
+      botId: botConfig?.id ?? botConfig?.name ?? "unknown",
+      code: "BOT_NOT_READY",
+      message: "Runtime not initialized",
+      retryable: false,
+      source: "worker",
+    });
+    return;
+  }
+
+  const found = runtime.toggleMode(modeName, enabled, paused);
+  if (!found) {
+    sendEvent({
+      type: "error",
+      botId: botConfig?.id ?? botConfig?.name ?? "unknown",
+      code: "MODE_NOT_FOUND",
+      message: `Mode "${modeName}" not found`,
+      retryable: false,
+      source: "worker",
+    });
+    return;
+  }
+
+  emitStateUpdate();
 }
 
 // ─── Handle getSnapshot ─────────────────────────────────────────────────────
@@ -370,7 +439,7 @@ function sendWorkerError(code: string, err: unknown): void {
 
 function buildStubJob(
   jobId: string,
-  state: "completed" | "failed",
+  state: "completed" | "failed" | "cancelled",
 ): Job {
   const now = new Date().toISOString();
   return {

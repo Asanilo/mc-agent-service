@@ -364,8 +364,6 @@ export class BotManager {
           };
           const failedError = { code: "WORKER_CRASH", message: `Worker exited with code ${code}`, retryable: true };
           this.eventBus.emit({
-            id: "",
-            ts: now,
             type: "job.failed",
             botId: record.id,
             jobId,
@@ -439,8 +437,6 @@ export class BotManager {
         record.reconnectAttempts = 0;
         record.lastError = undefined;
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "bot.connected",
           botId,
           data: {
@@ -464,8 +460,6 @@ export class BotManager {
           this.updateStatus(botId, "disconnected");
         }
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "bot.disconnected",
           botId,
           data: {
@@ -478,8 +472,6 @@ export class BotManager {
 
       case "stateUpdate":
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "state.changed",
           botId,
           data: event.state,
@@ -487,9 +479,8 @@ export class BotManager {
         break;
 
       case "jobProgress":
+        this.jobEventHandler?.(event);
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "job.progress",
           botId,
           jobId: event.jobId,
@@ -502,8 +493,6 @@ export class BotManager {
         record.currentJobId = undefined;
         this.jobEventHandler?.(event);
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "job.completed",
           botId,
           jobId: event.jobId,
@@ -516,8 +505,6 @@ export class BotManager {
         record.currentJobId = undefined;
         this.jobEventHandler?.(event);
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "job.failed",
           botId,
           jobId: event.jobId,
@@ -525,10 +512,20 @@ export class BotManager {
         } as any);
         break;
 
+      case "jobCancelled":
+        record.busy = false;
+        record.currentJobId = undefined;
+        this.jobEventHandler?.(event);
+        this.eventBus.emit({
+          type: "job.cancelled",
+          botId,
+          jobId: event.jobId,
+          data: { job: event.job, reason: event.reason },
+        } as any);
+        break;
+
       case "chatReceived":
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "chat.received",
           botId,
           data: {
@@ -549,8 +546,6 @@ export class BotManager {
           retryable: event.retryable,
         };
         this.eventBus.emit({
-          id: "",
-          ts: "",
           type: "error.raised",
           botId,
           data: {
@@ -571,9 +566,6 @@ export class BotManager {
         this.logger.warn({ botId, event: _exhaustive }, "Unknown worker event type");
       }
     }
-
-    // Forward to JobManager for job lifecycle tracking
-    this.jobEventHandler?.(event);
   }
 
   // ── Internal: status management ────────────────────────────────────────
@@ -593,8 +585,6 @@ export class BotManager {
 
   private emitBotError(botId: string, code: string, message: string): void {
     this.eventBus.emit({
-      id: "",
-      ts: "",
       type: "error.raised",
       botId,
       data: {

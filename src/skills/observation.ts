@@ -88,10 +88,16 @@ export const observeInventory: SkillDefinition<z.infer<typeof ObserveInventorySc
     const bot = ctx.bot;
     const { includeSlots, includeEquipment } = params;
 
-    // Build inventory counts
+    // Build inventory counts — fall back to slots if items() returns empty
+    // (happens in creative mode)
     const counts: Record<string, number> = {};
-    const slots = bot.inventory.items();
-    for (const item of slots) {
+    let inventoryItems = bot.inventory.items();
+    if (inventoryItems.length === 0) {
+      inventoryItems = bot.inventory.slots.filter(
+        (slot): slot is NonNullable<typeof slot> => slot !== null,
+      );
+    }
+    for (const item of inventoryItems) {
       counts[item.name] = (counts[item.name] ?? 0) + item.count;
     }
 

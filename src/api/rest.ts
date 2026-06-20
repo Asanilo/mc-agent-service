@@ -20,7 +20,6 @@ import {
   CancelJobRequestSchema,
   SendChatRequestSchema,
   ListJobsQuerySchema,
-  LookRequestSchema,
   ModesPatchRequestSchema,
   type ErrorResponse,
   type ErrorCode,
@@ -273,10 +272,10 @@ export function createRestRouter(opts: RestRouterOptions): Router {
   });
 
   /** DELETE /bots/:botId — Destroy bot */
-  router.delete("/bots/:botId", (req: Request, res: Response) => {
+  router.delete("/bots/:botId", async (req: Request, res: Response) => {
     try {
       const botId = param(req, "botId");
-      botManager.destroyBot(botId);
+      await botManager.destroyBot(botId);
       res.json({ botId, destroyed: true, cancelledJobIds: [] });
     } catch (err) {
       if (!handleKnownError(res, err)) {
@@ -390,46 +389,6 @@ export function createRestRouter(opts: RestRouterOptions): Router {
       if (!handleKnownError(res, err)) {
         logger.error({ err }, "Failed to get bot position");
         sendError(res, 500, "INTERNAL_ERROR", "Failed to get bot position");
-      }
-    }
-  });
-
-  /** POST /bots/:botId/look — Look at entity or position */
-  router.post("/bots/:botId/look", (req: Request, res: Response) => {
-    const botId = param(req, "botId");
-
-    const parsed = LookRequestSchema.safeParse(req.body);
-    if (!parsed.success) {
-      sendError(res, 400, "VALIDATION_FAILED", "Invalid request body", parsed.error.issues);
-      return;
-    }
-
-    try {
-      botManager.getBot(botId);
-
-      const state = stateCache.get(botId);
-      if (!state) {
-        sendError(res, 503, "SNAPSHOT_UNAVAILABLE", "Bot state not yet available");
-        return;
-      }
-
-      // Submit a look skill job via the worker
-      const target = parsed.data.target;
-      const job = jobManager.submitJob(botId, "move.look", {
-        target,
-        force: parsed.data.force,
-      });
-
-      res.json({
-        botId,
-        looked: true,
-        rotation: state.rotation,
-        updatedAt: new Date().toISOString(),
-      });
-    } catch (err) {
-      if (!handleKnownError(res, err)) {
-        logger.error({ err }, "Failed to look at target");
-        sendError(res, 500, "INTERNAL_ERROR", "Failed to look at target");
       }
     }
   });
@@ -657,7 +616,7 @@ export function createRestRouter(opts: RestRouterOptions): Router {
       botManager.getBot(botId);
 
       if (parsed.data.asJob) {
-        const job = jobManager.submitJob(botId, "chat", { message: parsed.data.message }, {
+        const job = jobManager.submitJob(botId, "chat.send", { message: parsed.data.message }, {
           timeoutMs: parsed.data.timeoutMs,
         });
         res.status(202).json({ job });

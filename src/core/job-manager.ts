@@ -355,6 +355,20 @@ export class JobManager {
         }
         break;
       }
+
+      case "jobCancelled": {
+        const job = this.jobs.get(event.jobId);
+        if (!job) return;
+        this.transitionJob(job, "cancelled");
+        job.cancellation = {
+          requestedAt: new Date().toISOString(),
+          reason: event.reason,
+          mode: "cancel-current",
+        };
+        this.emitJobEvent("job.cancelled", job, { reason: event.reason });
+        this.dispatchNextInQueue(job.botId);
+        break;
+      }
     }
   }
 
@@ -382,7 +396,7 @@ export class JobManager {
     if (job.timeoutMs > 0) {
       const timeoutHandle = setTimeout(() => {
         if (job.state === "running") {
-          this.transitionJob(job, "timeout");
+          this.transitionJob(job, "failed");
           job.error = {
             code: "JOB_TIMEOUT",
             message: `Job timed out after ${job.timeoutMs}ms`,
@@ -495,8 +509,6 @@ export class JobManager {
     extraData: Record<string, unknown> = {},
   ): void {
     this.eventBus.emit({
-      id: "",
-      ts: "",
       type: eventType,
       botId: job.botId,
       jobId: job.id,

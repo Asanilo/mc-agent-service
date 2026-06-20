@@ -159,7 +159,7 @@ export class SkillExecutor {
       try {
         // Check if already cancelled
         if (controller.signal.aborted) {
-          result = makeErrorResult("JOB_CANCELLED", "Job was cancelled before execution", false);
+          result = makeCancelledResult("Job was cancelled before execution");
         } else {
           result = await skill.run(ctx, parsed.data);
         }
@@ -184,10 +184,8 @@ export class SkillExecutor {
       return result;
     } catch (err) {
       if (controller.signal.aborted) {
-        return makeErrorResult(
-          "JOB_CANCELLED",
+        return makeCancelledResult(
           `Skill "${name}" was cancelled: ${controller.signal.reason ?? "no reason"}`,
-          false,
         );
       }
 
@@ -239,6 +237,14 @@ function makeErrorResult(
     ok: false,
     status: "failed" as SkillResultStatus,
     error: { code, message, retryable },
+  };
+}
+
+function makeCancelledResult(message: string): SkillResult {
+  return {
+    ok: false,
+    status: "cancelled" as SkillResultStatus,
+    error: { code: "JOB_CANCELLED", message, retryable: false },
   };
 }
 

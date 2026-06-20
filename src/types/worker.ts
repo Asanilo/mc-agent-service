@@ -149,6 +149,16 @@ export const WorkerJobFailedEventSchema = z
   })
   .strict();
 
+export const WorkerJobCancelledEventSchema = z
+  .object({
+    type: z.literal("jobCancelled"),
+    botId: z.string(),
+    jobId: z.string(),
+    job: JobSchema,
+    reason: z.string().optional(),
+  })
+  .strict();
+
 export const WorkerChatReceivedEventSchema = z
   .object({
     type: z.literal("chatReceived"),
@@ -179,6 +189,7 @@ export const WorkerEventSchema = z.discriminatedUnion("type", [
   WorkerJobProgressEventSchema,
   WorkerJobCompleteEventSchema,
   WorkerJobFailedEventSchema,
+  WorkerJobCancelledEventSchema,
   WorkerChatReceivedEventSchema,
   WorkerErrorEventSchema,
 ]);
@@ -192,6 +203,7 @@ export type WorkerStateUpdateEvent = z.infer<typeof WorkerStateUpdateEventSchema
 export type WorkerJobProgressEvent = z.infer<typeof WorkerJobProgressEventSchema>;
 export type WorkerJobCompleteEvent = z.infer<typeof WorkerJobCompleteEventSchema>;
 export type WorkerJobFailedEvent = z.infer<typeof WorkerJobFailedEventSchema>;
+export type WorkerJobCancelledEvent = z.infer<typeof WorkerJobCancelledEventSchema>;
 export type WorkerChatReceivedEvent = z.infer<typeof WorkerChatReceivedEventSchema>;
 export type WorkerErrorEvent = z.infer<typeof WorkerErrorEventSchema>;
 

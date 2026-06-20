@@ -24,6 +24,7 @@ export interface BotRuntimeEvents {
   jobProgress: (jobId: string, progress: SkillProgressReport) => void;
   jobComplete: (jobId: string, result: SkillResult) => void;
   jobFailed: (jobId: string, error: { code: string; message: string; retryable: boolean }) => void;
+  jobCancelled: (jobId: string, reason: string) => void;
   error: (err: { code: string; message: string; retryable: boolean; source: string }) => void;
   stateChanged: (state: BotState) => void;
   modeTriggered: (mode: string, reason: string) => void;
@@ -141,6 +142,8 @@ export class BotRuntime {
 
       if (result.ok) {
         this.eventCallbacks.jobComplete?.(jobId, result);
+      } else if (result.status === "cancelled") {
+        this.eventCallbacks.jobCancelled?.(jobId, result.error?.message ?? "cancelled");
       } else {
         this.eventCallbacks.jobFailed?.(jobId, {
           code: result.error?.code ?? "SKILL_FAILED",
@@ -168,6 +171,12 @@ export class BotRuntime {
     const state = this.stateTracker.getState();
     state.modes = this.modeEngine.getStatuses();
     return state;
+  }
+
+  // ── Toggle a mode ──────────────────────────────────────────────────────
+
+  toggleMode(modeName: string, enabled?: boolean, paused?: boolean): boolean {
+    return this.modeEngine.toggleMode(modeName, enabled, paused);
   }
 
   // ── Send chat ───────────────────────────────────────────────────────────

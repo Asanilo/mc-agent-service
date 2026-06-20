@@ -182,6 +182,15 @@ export class ModeEngine {
     runtime.enabled = enabled;
   }
 
+  /** Toggle mode enabled/paused state. Returns true if mode was found. */
+  toggleMode(name: string, enabled?: boolean, paused?: boolean): boolean {
+    const runtime = this.modes.get(name);
+    if (!runtime) return false;
+    if (enabled !== undefined) runtime.enabled = enabled;
+    if (paused !== undefined) runtime.paused = paused;
+    return true;
+  }
+
   isEnabled(name: string): boolean {
     return this.modes.get(name)?.enabled ?? false;
   }
