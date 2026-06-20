@@ -214,7 +214,7 @@ export const combatAttackNearest: SkillDefinition<z.infer<typeof AttackNearestSc
 // ─── combat.defend_self ─────────────────────────────────────────────────────
 
 const DefendSelfSchema = z.object({
-  radius: z.number().min(1).max(64).default(9),
+  distance: z.number().min(1).max(64).default(9),
 }).strict();
 
 export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>> = {
@@ -228,7 +228,7 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
   parameters: DefendSelfSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { radius } = params;
+    const { distance } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "defense", message: "Defending self" });
 
@@ -236,7 +236,7 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
     let enemiesDefeated = 0;
 
     // Find nearest hostile entity
-    let enemy = getNearbyEntities(bot, radius).find(isHostile);
+    let enemy = getNearbyEntities(bot, distance).find(isHostile);
 
     while (enemy) {
       if (checkCancelled(ctx)) {
@@ -244,7 +244,7 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
         return {
           ok: true,
           status: "cancelled",
-          data: { defended: true, enemiesDefeated, enemiesRemaining: getNearbyEntities(bot, radius).filter(isHostile).length },
+          data: { defended: true, enemiesDefeated, enemiesRemaining: getNearbyEntities(bot, distance).filter(isHostile).length },
         };
       }
 
@@ -290,13 +290,13 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
       enemiesDefeated++;
 
       // Find next enemy
-      enemy = getNearbyEntities(bot, radius).find(isHostile);
+      enemy = getNearbyEntities(bot, distance).find(isHostile);
     }
 
     // Stop pvp
     if (pvp) pvp.stop();
 
-    const enemiesRemaining = getNearbyEntities(bot, radius).filter(isHostile).length;
+    const enemiesRemaining = getNearbyEntities(bot, distance).filter(isHostile).length;
 
     return {
       ok: true,
@@ -318,7 +318,7 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
 const AttackEntitySchema = z.object({
   entityType: z.string().min(1).optional(),
   entityId: z.number().int().nonnegative().optional(),
-  radius: z.number().min(1).max(64).default(16),
+  distance: z.number().min(1).max(64).default(16),
 }).strict().refine((data) => data.entityType !== undefined || data.entityId !== undefined, {
   message: "Must provide either entityType or entityId",
 });
@@ -334,7 +334,7 @@ export const combatAttackEntity: SkillDefinition<z.infer<typeof AttackEntitySche
   parameters: AttackEntitySchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { entityType, entityId, radius } = params;
+    const { entityType, entityId, distance } = params;
 
     let target: Entity | undefined;
 
@@ -352,13 +352,13 @@ export const combatAttackEntity: SkillDefinition<z.infer<typeof AttackEntitySche
 
     // Find by entity type
     if (!target && entityType) {
-      const entities = getNearbyEntities(bot, radius);
+      const entities = getNearbyEntities(bot, distance);
       target = entities.find((e) => e.name === entityType);
       if (!target) {
         return {
           ok: false,
           status: "failed",
-          error: { code: "TARGET_NOT_FOUND", message: `No ${entityType} found within ${radius} blocks`, retryable: true },
+          error: { code: "TARGET_NOT_FOUND", message: `No ${entityType} found within ${distance} blocks`, retryable: true },
         };
       }
     }

@@ -38,6 +38,15 @@ function findNearestBlock(bot: Bot, blockName: string, maxDistance: number) {
   return bot.blockAt(positions[0]!);
 }
 
+function findPlayerEntity(bot: Bot, username: string) {
+  const listedEntity = bot.players[username]?.entity;
+  if (listedEntity) return listedEntity;
+
+  return Object.values(bot.entities).find(
+    (entity) => entity.type === "player" && (entity as { username?: string }).username === username
+  );
+}
+
 // ─── inventory.equip ────────────────────────────────────────────────────────
 
 const EquipSchema = z.object({
@@ -482,7 +491,7 @@ export const inventoryTakeFromChest: SkillDefinition<z.infer<typeof TakeFromChes
 // ─── inventory.give_to_player ──────────────────────────────────────────────
 
 const GiveToPlayerSchema = z.object({
-  playerName: z.string().min(1),
+  username: z.string().min(1),
   itemName: z.string().min(1),
   num: z.number().int().min(1).default(1),
 }).strict();
@@ -498,10 +507,10 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
   parameters: GiveToPlayerSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { playerName, itemName, num } = params;
+    const { username, itemName, num } = params;
 
     // Cannot give to self
-    if (bot.username === playerName) {
+    if (bot.username === username) {
       return {
         ok: false,
         status: "failed",
@@ -520,18 +529,16 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
     }
 
     // Find the player
-    const player = bot.players[playerName];
-    if (!player || !player.entity) {
+    const playerEntity = findPlayerEntity(bot, username);
+    if (!playerEntity) {
       return {
         ok: false,
         status: "failed",
-        error: { code: "TARGET_NOT_FOUND", message: `Player "${playerName}" not found or not loaded`, retryable: true },
+        error: { code: "TARGET_NOT_FOUND", message: `Player "${username}" not found or not loaded`, retryable: true },
       };
     }
 
-    const playerEntity = player.entity;
-
-    ctx.progress({ current: 0, target: 3, unit: "steps", message: `Moving to ${playerName}` });
+    ctx.progress({ current: 0, target: 3, unit: "steps", message: `Moving to ${username}` });
 
     // Navigate to player
     const movements = new Movements(bot);
@@ -586,7 +593,7 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
     // Wait briefly for the player to pick up
     let received = false;
     const onCollect = (collector: any, _collected: any) => {
-      if (collector.username === playerName) {
+      if (collector.username === username) {
         received = true;
       }
     };
@@ -603,8 +610,8 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
     return {
       ok: true,
       status: "success",
-      data: { given: true, itemName, username: playerName, count: given },
-      message: `Gave ${given} ${itemName} to ${playerName}`,
+      data: { given: true, itemName, username, count: given },
+      message: `Gave ${given} ${itemName} to ${username}`,
     };
   },
 };

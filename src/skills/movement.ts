@@ -10,39 +10,20 @@ import pf from "mineflayer-pathfinder";
 const { goals, Movements } = pf;
 import { Vec3 } from "vec3";
 
-// ─── Helper: check cancellation ─────────────────────────────────────────────
-
-// ─── Helper: create Movements with creative mode support ──────────────────────
-
-
+// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function createMovements(bot: Bot): InstanceType<typeof Movements> {
-  const movements = new Movements(bot);
-
-  if (bot.game.gameMode === "creative") {
-    movements.canOpenDoors = false;
-    movements.canDig = false;
-  }
-
-  return movements;
+  return new Movements(bot);
 }
 
-async function enableCreativeFlying(bot: Bot): Promise<void> {
-  if (bot.game.gameMode !== "creative") return;
-  if (bot.creative?.startFlying) {
-    bot.creative.startFlying();
-  } else {
-    // Fallback: simulate double-jump
-    bot.setControlState("jump", true);
-    await new Promise((r) => setTimeout(r, 50));
-    bot.setControlState("jump", false);
-    await new Promise((r) => setTimeout(r, 50));
-    bot.setControlState("jump", true);
-    await new Promise((r) => setTimeout(r, 50));
-    bot.setControlState("jump", false);
-  }
-}
+function findPlayerEntity(bot: Bot, username: string) {
+  const listedEntity = bot.players[username]?.entity;
+  if (listedEntity) return listedEntity;
 
+  return Object.values(bot.entities).find(
+    (entity) => entity.type === "player" && (entity as { username?: string }).username === username
+  );
+}
 
 function checkCancelled(ctx: SkillExecutionContext): boolean {
   return ctx.signal.aborted;
@@ -54,7 +35,7 @@ const ToPositionSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   z: z.number().finite(),
-  minDistance: z.number().min(0).max(64).default(2),
+  distance: z.number().min(0).max(64).default(2),
 }).strict();
 
 export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> = {
@@ -68,15 +49,13 @@ export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> =
   parameters: ToPositionSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { x, y, z, minDistance } = params;
+    const { x, y, z, distance } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to ${x}, ${y}, ${z}` });
 
     const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
-    const goal = new goals.GoalNear(x, y, z, minDistance);
-
-    await enableCreativeFlying(bot);
+    const goal = new goals.GoalNear(x, y, z, distance);
 
     try {
       await bot.pathfinder.goto(goal);
@@ -93,16 +72,16 @@ export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> =
     }
 
     const pos = bot.entity.position;
-    const distance = pos.distanceTo(new Vec3(x, y, z));
+    const actualDistance = pos.distanceTo(new Vec3(x, y, z));
     ctx.progress({ current: 1, target: 1, unit: "navigation", message: "Arrived" });
 
     return {
       ok: true,
       status: "success",
       data: {
-        reached: distance <= minDistance + 1,
+        reached: actualDistance <= distance + 1,
         position: { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) },
-        distance: Math.round(distance * 10) / 10,
+        distance: Math.round(actualDistance * 10) / 10,
       },
     };
   },
@@ -128,8 +107,8 @@ export const moveToPlayer: SkillDefinition<z.infer<typeof ToPlayerSchema>> = {
     const bot = ctx.bot;
     const { username, distance } = params;
 
-    const player = bot.players[username];
-    if (!player || !player.entity) {
+    const entity = findPlayerEntity(bot, username);
+    if (!entity) {
       return {
         ok: false,
         status: "failed",
@@ -139,12 +118,9 @@ export const moveToPlayer: SkillDefinition<z.infer<typeof ToPlayerSchema>> = {
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to player ${username}` });
 
-    const entity = player.entity;
     const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
     const goal = new goals.GoalFollow(entity, distance);
-
-    await enableCreativeFlying(bot);
 
     try {
       await bot.pathfinder.goto(goal);
@@ -196,16 +172,15 @@ export const moveFollowPlayer: SkillDefinition<z.infer<typeof FollowPlayerSchema
     const bot = ctx.bot;
     const { username, distance } = params;
 
-    const player = bot.players[username];
-    if (!player || !player.entity) {
+    const entity = findPlayerEntity(bot, username);
+    if (!entity) {
       return {
         ok: false,
         status: "failed",
-        error: { code: "TARGET_NOT_FOUND", message: `Player "${username}" not found or not loaded`, retryable: true },
+        error: { code: "TARGET_NOT_FOUND", message: `Player "${username}" not found`, retryable: true },
       };
     }
 
-    const entity = player.entity;
     const move = createMovements(bot);
     move.digCost = 10;
     bot.pathfinder.setMovements(move);
@@ -218,8 +193,8 @@ export const moveFollowPlayer: SkillDefinition<z.infer<typeof FollowPlayerSchema
     while (!checkCancelled(ctx)) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       // Re-check player entity still exists
-      const currentPlayer = bot.players[username];
-      if (!currentPlayer || !currentPlayer.entity) {
+      const currentEntity = findPlayerEntity(bot, username);
+      if (!currentEntity) {
         bot.pathfinder.stop();
         return {
           ok: false,
@@ -296,8 +271,7 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
 
 const ToBlockSchema = z.object({
   blockType: z.string().min(1),
-  minDistance: z.number().min(0).max(64).default(2),
-  radius: z.number().int().min(1).max(512).default(64),
+  distance: z.number().int().min(1).max(512).default(64),
 }).strict();
 
 export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
@@ -311,7 +285,8 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
   parameters: ToBlockSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockType, minDistance, radius } = params;
+    const { blockType, distance } = params;
+    const arrivalDistance = 2;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Searching for ${blockType}` });
 
@@ -320,21 +295,21 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
     if (blockType === "water" || blockType === "lava") {
       blocks = bot.findBlocks({
         matching: (block) => block.name === blockType && (block as any).metadata === 0,
-        maxDistance: radius,
+        maxDistance: distance,
         count: 1,
       });
       if (blocks.length === 0) {
         // Fall back to any flowing block
         blocks = bot.findBlocks({
           matching: (block) => block.name === blockType,
-          maxDistance: radius,
+          maxDistance: distance,
           count: 1,
         });
       }
     } else {
       blocks = bot.findBlocks({
         matching: (block) => block.name === blockType,
-        maxDistance: radius,
+        maxDistance: distance,
         count: 1,
       });
     }
@@ -343,7 +318,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
       return {
         ok: false,
         status: "failed",
-        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${radius} blocks`, retryable: true },
+        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${distance} blocks`, retryable: true },
       };
     }
 
@@ -356,10 +331,8 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
     const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
 
-    await enableCreativeFlying(bot);
-
     try {
-      await bot.pathfinder.goto(new goals.GoalNear(blockPos.x, blockPos.y, blockPos.z, minDistance));
+      await bot.pathfinder.goto(new goals.GoalNear(blockPos.x, blockPos.y, blockPos.z, arrivalDistance));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (checkCancelled(ctx)) {
@@ -373,16 +346,16 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
     }
 
     const pos = bot.entity.position;
-    const distance = pos.distanceTo(blockPos);
+    const actualDistance = pos.distanceTo(blockPos);
     ctx.progress({ current: 1, target: 1, unit: "navigation", message: "Arrived" });
 
     return {
       ok: true,
       status: "success",
       data: {
-        reached: distance <= minDistance + 1,
+        reached: actualDistance <= arrivalDistance + 1,
         block: { name: block?.name ?? blockType, position: { x: blockPos.x, y: blockPos.y, z: blockPos.z } },
-        distance: Math.round(distance * 10) / 10,
+        distance: Math.round(actualDistance * 10) / 10,
       },
     };
   },

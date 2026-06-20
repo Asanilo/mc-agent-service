@@ -362,7 +362,7 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
       x: z.number().finite().describe("Target X coordinate"),
       y: z.number().finite().describe("Target Y coordinate"),
       z: z.number().finite().describe("Target Z coordinate"),
-      minDistance: z.number().min(0).max(64).default(2).describe("Arrival distance threshold"),
+      distance: z.number().min(0).max(64).default(2).describe("Arrival distance threshold"),
     },
 
     async (args) => {
@@ -372,7 +372,7 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
           x: args.x,
           y: args.y,
           z: args.z,
-          minDistance: args.minDistance,
+          distance: args.distance,
         });
         return {
           content: [
@@ -442,7 +442,7 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
       botId: z.string().describe("The bot ID"),
       blockType: z.string().min(1).describe("Type of block to collect (e.g. 'oak_log', 'stone')"),
       num: z.number().int().min(1).default(1).describe("Number of blocks to collect"),
-      radius: z.number().int().min(1).max(128).default(32).describe("Search radius in blocks"),
+      distance: z.number().int().min(1).max(128).default(32).describe("Search distance in blocks"),
     },
     async (args) => {
       try {
@@ -450,7 +450,7 @@ export function createMcpServer(opts: McpAdapterOptions): McpServer {
         const job = jobManager.submitJob(args.botId, "mine.collect_blocks", {
           blockType: args.blockType,
           num: args.num,
-          radius: args.radius,
+          distance: args.distance,
         });
         return {
           content: [

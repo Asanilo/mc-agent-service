@@ -40,7 +40,7 @@ function resolveBlockTypes(blockType: string): string[] {
 const CollectBlocksSchema = z.object({
   blockType: z.string().min(1),
   num: z.number().int().min(1).default(1),
-  radius: z.number().int().min(1).max(128).default(32),
+  distance: z.number().int().min(1).max(128).default(32),
 }).strict();
 
 export const mineCollectBlocks: SkillDefinition<z.infer<typeof CollectBlocksSchema>> = {
@@ -54,7 +54,7 @@ export const mineCollectBlocks: SkillDefinition<z.infer<typeof CollectBlocksSche
   parameters: CollectBlocksSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockType, num, radius } = params;
+    const { blockType, num, distance } = params;
 
     const blockTypes = resolveBlockTypes(blockType);
     const isLiquid = blockType === "lava" || blockType === "water";
@@ -71,12 +71,12 @@ export const mineCollectBlocks: SkillDefinition<z.infer<typeof CollectBlocksSche
           if (isLiquid) return block.metadata === 0;
           return true;
         },
-        maxDistance: radius,
+        maxDistance: distance,
         count: 1,
       });
 
       if (blocks.length === 0) {
-        ctx.log(collected === 0 ? `No ${blockType} found within ${radius} blocks` : `No more ${blockType} found`);
+        ctx.log(collected === 0 ? `No ${blockType} found within ${distance} blocks` : `No more ${blockType} found`);
         break;
       }
 

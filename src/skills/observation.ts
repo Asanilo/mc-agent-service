@@ -133,7 +133,7 @@ export const observeInventory: SkillDefinition<z.infer<typeof ObserveInventorySc
 // ─── observe.nearby ─────────────────────────────────────────────────────────
 
 const ObserveNearbySchema = z.object({
-  radius: z.number().min(1).max(256).default(16),
+  distance: z.number().min(1).max(256).default(16),
   includePlayers: z.boolean().default(true),
   includeEntities: z.boolean().default(true),
   includeBlockTypes: z.boolean().default(true),
@@ -150,7 +150,7 @@ export const observeNearby: SkillDefinition<z.infer<typeof ObserveNearbySchema>>
   parameters: ObserveNearbySchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { radius: scanRadius, includePlayers, includeEntities, includeBlockTypes } = params;
+    const { distance: scanDistance, includePlayers, includeEntities, includeBlockTypes } = params;
 
     const result: any = {};
 
@@ -161,7 +161,7 @@ export const observeNearby: SkillDefinition<z.infer<typeof ObserveNearbySchema>>
         if (username === bot.username) continue;
         if (!player.entity) continue;
         const distance = bot.entity.position.distanceTo(player.entity.position);
-        if (distance <= scanRadius) {
+        if (distance <= scanDistance) {
           const p = player.entity.position;
           players.push({
             username,
@@ -180,7 +180,7 @@ export const observeNearby: SkillDefinition<z.infer<typeof ObserveNearbySchema>>
       for (const entity of Object.values(bot.entities)) {
         if (entity === bot.entity) continue;
         const distance = bot.entity.position.distanceTo(entity.position);
-        if (distance <= scanRadius && entity.name) {
+        if (distance <= scanDistance && entity.name) {
           const p = entity.position;
           entities.push({
             name: entity.name,
@@ -198,11 +198,11 @@ export const observeNearby: SkillDefinition<z.infer<typeof ObserveNearbySchema>>
     if (includeBlockTypes) {
       const blockTypes = new Set<string>();
       const pos = bot.entity.position;
-      const range = Math.min(scanRadius, 32); // limit scan range for performance
+      const scanRange = Math.min(scanDistance, 32); // limit scan range for performance
 
-      for (let dx = -range; dx <= range; dx += 4) {
-        for (let dy = -range; dy <= range; dy += 4) {
-          for (let dz = -range; dz <= range; dz += 4) {
+      for (let dx = -scanRange; dx <= scanRange; dx += 4) {
+        for (let dy = -scanRange; dy <= scanRange; dy += 4) {
+          for (let dz = -scanRange; dz <= scanRange; dz += 4) {
             const block = bot.blockAt(pos.offset(dx, dy, dz));
             if (block && block.name !== "air" && block.name !== "cave_air") {
               blockTypes.add(block.name);
@@ -289,9 +289,9 @@ export const observeCraftable: SkillDefinition<z.infer<typeof ObserveCraftableSc
 // ─── observe.nearby_blocks ──────────────────────────────────────────────────
 
 const NearbyBlocksSchema = z.object({
-  blockTypes: z.array(z.string().min(1)).optional(),
-  radius: z.number().int().min(1).max(256).default(16),
-  count: z.number().int().min(1).max(10000).default(100),
+  blockType: z.string().min(1).optional(),
+  distance: z.number().int().min(1).max(256).default(16),
+  num: z.number().int().min(1).max(10000).default(100),
 }).strict();
 
 export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSchema>> = {
@@ -305,18 +305,18 @@ export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSch
   parameters: NearbyBlocksSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockTypes, radius, count } = params;
+    const { blockType, distance, num } = params;
 
     const positions = bot.findBlocks({
       matching: (block) => {
         if (block.name === "air" || block.name === "cave_air") return false;
-        if (blockTypes && blockTypes.length > 0) {
-          return blockTypes.includes(block.name);
+        if (blockType) {
+          return block.name === blockType;
         }
         return true;
       },
-      maxDistance: radius,
-      count,
+      maxDistance: distance,
+      count: num,
     });
 
     const botPos = bot.entity.position;
@@ -345,7 +345,7 @@ export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSch
 
 const NearbyEntitiesSchema = z.object({
   entityTypes: z.array(z.string().min(1)).optional(),
-  radius: z.number().int().min(1).max(256).default(16),
+  distance: z.number().int().min(1).max(256).default(16),
 }).strict();
 
 export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitiesSchema>> = {
@@ -359,7 +359,7 @@ export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitie
   parameters: NearbyEntitiesSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { entityTypes, radius } = params;
+    const { entityTypes, distance: maxDistance } = params;
 
     const botPos = bot.entity.position;
     const entities: Array<{
@@ -375,7 +375,7 @@ export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitie
       if (!entity.name) continue;
 
       const distance = botPos.distanceTo(entity.position);
-      if (distance > radius) continue;
+      if (distance > maxDistance) continue;
 
       if (entityTypes && entityTypes.length > 0) {
         if (!entityTypes.includes(entity.name)) continue;
