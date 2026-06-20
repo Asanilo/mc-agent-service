@@ -381,6 +381,34 @@ export function createSelfPreservationMode(): ModeDefinition {
  */
 export function createSelfDefenseMode(): ModeDefinition {
   let defeatedCount = 0;
+  let lastAttackTime = 0;
+
+  // Weapon damage values (higher = better)
+  const WEAPON_DAMAGE: Record<string, number> = {
+    netherite_sword: 4, diamond_sword: 3, iron_sword: 3,
+    stone_sword: 2, wooden_sword: 1, gold_sword: 1,
+    netherite_axe: 3, diamond_axe: 3, iron_axe: 2,
+    stone_axe: 2, wooden_axe: 1, gold_axe: 1,
+  };
+
+  function equipBestWeapon(bot: Bot): void {
+    const current = bot.heldItem?.name ?? "";
+    if (WEAPON_DAMAGE[current]) return; // already holding a weapon
+
+    // Find best weapon in inventory
+    let bestItem: any = null;
+    let bestDamage = 0;
+    for (const item of bot.inventory.items()) {
+      const dmg = WEAPON_DAMAGE[item.name] ?? 0;
+      if (dmg > bestDamage) {
+        bestDamage = dmg;
+        bestItem = item;
+      }
+    }
+    if (bestItem) {
+      bot.equip(bestItem, "hand").catch(() => {});
+    }
+  }
 
   return {
     name: "self_defense",
@@ -391,6 +419,7 @@ export function createSelfDefenseMode(): ModeDefinition {
     interruptsAll: true,
     interruptsSkills: [],
     update: (ctx) => {
+      const now = Date.now();
       const bot = ctx.bot;
       const pos = bot.entity.position;
 
@@ -401,8 +430,8 @@ export function createSelfDefenseMode(): ModeDefinition {
         return;
       }
 
-      // Find nearest hostile mob within 5 blocks
-      let nearestHostile: Entity | null = null;
+      // Find nearest alive hostile mob within 5 blocks
+      let nearestHostile: any = null;
       let nearestDist = Infinity;
 
       for (const entity of Object.values(bot.entities)) {
@@ -411,6 +440,9 @@ export function createSelfDefenseMode(): ModeDefinition {
         const dist = pos.distanceTo(entity.position);
         if (dist > 5 || dist >= nearestDist) continue;
         if (!isHostile(entity)) continue;
+        // Check if entity is alive (health > 0 or no health data)
+        const health = (entity as any).health;
+        if (health !== undefined && health <= 0) continue;
         nearestHostile = entity;
         nearestDist = dist;
       }
@@ -418,15 +450,23 @@ export function createSelfDefenseMode(): ModeDefinition {
       if (nearestHostile) {
         ctx.log(`Hostile ${nearestHostile.name} nearby — attacking!`);
         ctx.interruptCurrentAction();
-        try {
-          bot.attack(nearestHostile);
-          // Check if entity was defeated (no longer in world)
-          if (!bot.entities[nearestHostile.id]) {
-            defeatedCount++;
-            ctx.log(`Defeated hostile #${defeatedCount}: ${nearestHostile.name}`);
+
+        // Equip best weapon before attacking
+        equipBestWeapon(bot);
+
+        // Attack with cooldown (0.6s between hits)
+        if (now - lastAttackTime > 600) {
+          try {
+            bot.attack(nearestHostile);
+            lastAttackTime = now;
+            // Check if entity was defeated
+            if (!bot.entities[nearestHostile.id]) {
+              defeatedCount++;
+              ctx.log(`Defeated hostile #${defeatedCount}: ${nearestHostile.name}`);
+            }
+          } catch {
+            // Entity may have despawned mid-attack
           }
-        } catch {
-          // Entity may have despawned mid-attack
         }
       }
     },
@@ -460,7 +500,29 @@ export function createUnstuckMode(): ModeDefinition {
       const pos = bot.entity.position;
       const now = Date.now();
 
-      // Track position even when idle
+      if (ctx.isIdle) {
+        // Idle: only react to health drops (suffocation, drowning, etc.)
+        const healthDiff = prevHealth - bot.health;
+        prevHealth = bot.health;
+
+        if (healthDiff > 0 && bot.health < 15) {
+          ctx.log(`Taking damage while idle (health: ${bot.health}) — escaping!`);
+          // Try jump + random direction
+          bot.setControlState("jump", true);
+          setTimeout(() => bot.setControlState("jump", false), 500);
+          const dir = Math.random() > 0.5 ? "forward" : "back";
+          bot.setControlState(dir, true);
+          setTimeout(() => bot.setControlState(dir, false), 800);
+        }
+
+        prevPosition = null;
+        stuckTime = 0;
+        lastEscalation = 0;
+        lastCheck = now;
+        return;
+      }
+
+      // Job running: position-based stuck detection
       if (prevPosition) {
         const dx = pos.x - prevPosition.x;
         const dy = pos.y - prevPosition.y;
@@ -480,8 +542,7 @@ export function createUnstuckMode(): ModeDefinition {
 
       lastCheck = now;
 
-      // When idle, use longer threshold (15s) and only jump, don't do random moves
-      const threshold = ctx.isIdle ? 15 : 5;
+      const threshold = 5;
 
       if (stuckTime > threshold && lastEscalation < 1) {
         ctx.log(`Stuck for ${threshold}s — jumping!`);
