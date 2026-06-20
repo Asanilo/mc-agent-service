@@ -231,12 +231,12 @@ export const mineBreakBlockAt: SkillDefinition<z.infer<typeof BreakBlockAtSchema
 // ─── mine.dig_down ─────────────────────────────────────────────────────────
 
 const DigDownSchema = z.object({
-  targetY: z.number().int().min(-64).max(320),
+  distance: z.number().int().min(1).max(64).default(10),
 }).strict();
 
 export const mineDigDown: SkillDefinition<z.infer<typeof DigDownSchema>> = {
   name: "mine.dig_down",
-  description: "Dig straight down to a target Y level.",
+  description: "Dig downward from the bot's current position for a bounded number of blocks.",
   category: "mining",
   permissions: ["movement", "block.break", "inventory"],
   timeoutMs: 120000,
@@ -245,19 +245,13 @@ export const mineDigDown: SkillDefinition<z.infer<typeof DigDownSchema>> = {
   parameters: DigDownSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { targetY } = params;
+    const { distance } = params;
 
     const startY = Math.floor(bot.entity.position.y);
-    if (targetY >= startY) {
-      return {
-        ok: false,
-        status: "failed",
-        error: { code: "VALIDATION_FAILED", message: `Target Y ${targetY} is not below current Y ${startY}`, retryable: false },
-      };
-    }
+    const targetY = startY - distance;
 
-    const totalBlocks = startY - targetY;
-    ctx.progress({ current: 0, target: totalBlocks, unit: "blocks", message: `Digging down to Y=${targetY}` });
+    const totalBlocks = distance;
+    ctx.progress({ current: 0, target: totalBlocks, unit: "blocks", message: `Digging down ${distance} blocks` });
 
     let dug = 0;
     let stoppedReason: string | undefined;
@@ -333,8 +327,8 @@ export const mineDigDown: SkillDefinition<z.infer<typeof DigDownSchema>> = {
     return {
       ok: dug > 0,
       status: "success",
-      data: { dug, requested: totalBlocks, stoppedReason },
-      message: stoppedReason ? `Dug ${dug} blocks, stopped: ${stoppedReason}` : `Dug ${dug} blocks to Y=${targetY}`,
+      data: { dug, requested: distance, stoppedReason },
+      message: stoppedReason ? `Dug ${dug} blocks, stopped: ${stoppedReason}` : `Dug ${dug} blocks downward`,
     };
   },
 };

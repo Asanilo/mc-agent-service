@@ -35,7 +35,7 @@ const ToPositionSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   z: z.number().finite(),
-  distance: z.number().min(0).max(64).default(2),
+  minDistance: z.number().min(0).max(64).default(2),
 }).strict();
 
 export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> = {
@@ -49,7 +49,7 @@ export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> =
   parameters: ToPositionSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { x, y, z, distance } = params;
+    const { x, y, z, minDistance: distance } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to ${x}, ${y}, ${z}` });
 
@@ -271,7 +271,8 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
 
 const ToBlockSchema = z.object({
   blockType: z.string().min(1),
-  distance: z.number().int().min(1).max(512).default(64),
+  minDistance: z.number().min(0).max(64).default(2),
+  range: z.number().int().min(1).max(512).default(64),
 }).strict();
 
 export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
@@ -285,8 +286,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
   parameters: ToBlockSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockType, distance } = params;
-    const arrivalDistance = 2;
+    const { blockType, minDistance: arrivalDistance, range: distance } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Searching for ${blockType}` });
 
@@ -439,6 +439,159 @@ export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema
 
 // ─── Export all movement skills ─────────────────────────────────────────────
 
+// ─── move.to_entity ─────────────────────────────────────────────────────────
+
+const ToEntitySchema = z.object({
+  entityType: z.string().min(1).optional(),
+  entityId: z.number().int().nonnegative().optional(),
+  minDistance: z.number().min(0.5).max(64).default(2),
+}).strict().refine((data) => data.entityType !== undefined || data.entityId !== undefined, {
+  message: "Must provide either entityType or entityId",
+});
+
+export const moveToEntity: SkillDefinition<z.infer<typeof ToEntitySchema>> = {
+  name: "move.to_entity",
+  description: "Navigate to an entity by type or ID.",
+  category: "movement",
+  permissions: ["movement", "entity.interact"],
+  timeoutMs: 60000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: ToEntitySchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { entityType, entityId, minDistance } = params;
+
+    let target: import("prismarine-entity").Entity | undefined;
+
+    if (entityId !== undefined) {
+      target = bot.entities[entityId];
+      if (!target) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "TARGET_NOT_FOUND", message: `Entity with ID ${entityId} not found`, retryable: true },
+        };
+      }
+    }
+
+    if (!target && entityType) {
+      const entities = Object.values(bot.entities).filter((e) => e !== bot.entity && e.name === entityType);
+      entities.sort((a, b) => a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position));
+      target = entities[0];
+      if (!target) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "TARGET_NOT_FOUND", message: `No ${entityType} found nearby`, retryable: true },
+        };
+      }
+    }
+
+    if (!target) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "TARGET_NOT_FOUND", message: "No target specified or found", retryable: true },
+      };
+    }
+
+    ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to ${target.name}` });
+
+    const movements = createMovements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    try {
+      await bot.pathfinder.goto(new goals.GoalFollow(target, minDistance));
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Movement cancelled" };
+      }
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "PATH_NOT_FOUND", message: `Pathfinding failed: ${msg}`, retryable: true },
+      };
+    }
+
+    const pos = bot.entity.position;
+    const dist = pos.distanceTo(target.position);
+    ctx.progress({ current: 1, target: 1, unit: "navigation", message: "Arrived" });
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        reached: dist <= minDistance + 1,
+        entity: { name: target.name, id: target.id },
+        distance: Math.round(dist * 10) / 10,
+      },
+    };
+  },
+};
+
+// ─── move.away ──────────────────────────────────────────────────────────────
+
+const MoveAwaySchema = z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  z: z.number().finite(),
+  distance: z.number().min(1).max(128).default(16),
+}).strict();
+
+export const moveAway: SkillDefinition<z.infer<typeof MoveAwaySchema>> = {
+  name: "move.away",
+  description: "Move away from a target position.",
+  category: "movement",
+  permissions: ["movement"],
+  timeoutMs: 60000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: MoveAwaySchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { x, y, z, distance } = params;
+
+    const targetPos = new Vec3(x, y, z);
+    const botPos = bot.entity.position;
+
+    ctx.progress({ current: 0, target: 1, unit: "fleeing", message: `Moving away from ${x}, ${y}, ${z}` });
+
+    // Use GoalInvert on a GoalNear to move in the opposite direction
+    const followGoal = new goals.GoalFollow({ position: targetPos } as any, distance);
+    const invertedGoal = new goals.GoalInvert(followGoal);
+    const movements = createMovements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    try {
+      await bot.pathfinder.goto(invertedGoal);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Movement cancelled" };
+      }
+      // Pathfinder may throw when it can't find a path far enough — that's ok
+      ctx.log(`Pathfinder stopped: ${msg}`);
+    }
+
+    bot.pathfinder.stop();
+    const newPos = bot.entity.position;
+    const actualDistance = newPos.distanceTo(targetPos);
+    ctx.progress({ current: 1, target: 1, unit: "fleeing", message: "Moved away" });
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        moved: true,
+        position: { x: Math.round(newPos.x), y: Math.round(newPos.y), z: Math.round(newPos.z) },
+        distanceFromTarget: Math.round(actualDistance * 10) / 10,
+      },
+    };
+  },
+};
+
 export const movementSkills = [
   moveToPosition,
   moveToBlock,
@@ -446,4 +599,6 @@ export const movementSkills = [
   moveFollowPlayer,
   moveStay,
   moveAvoidEnemies,
+  moveToEntity,
+  moveAway,
 ];

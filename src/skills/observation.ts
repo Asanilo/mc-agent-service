@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { Bot } from "mineflayer";
 import type { SkillDefinition, SkillExecutionContext } from "../bots/skill-executor.js";
 import type { SkillResult } from "../types/skills.js";
+import { Vec3 } from "vec3";
 
 // ─── observe.state ──────────────────────────────────────────────────────────
 
@@ -139,7 +140,7 @@ export const observeInventory: SkillDefinition<z.infer<typeof ObserveInventorySc
 // ─── observe.nearby ─────────────────────────────────────────────────────────
 
 const ObserveNearbySchema = z.object({
-  distance: z.number().min(1).max(256).default(16),
+  maxDistance: z.number().min(1).max(256).default(16),
   includePlayers: z.boolean().default(true),
   includeEntities: z.boolean().default(true),
   includeBlockTypes: z.boolean().default(true),
@@ -156,7 +157,7 @@ export const observeNearby: SkillDefinition<z.infer<typeof ObserveNearbySchema>>
   parameters: ObserveNearbySchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { distance: scanDistance, includePlayers, includeEntities, includeBlockTypes } = params;
+    const { maxDistance: scanDistance, includePlayers, includeEntities, includeBlockTypes } = params;
 
     const result: any = {};
 
@@ -295,9 +296,9 @@ export const observeCraftable: SkillDefinition<z.infer<typeof ObserveCraftableSc
 // ─── observe.nearby_blocks ──────────────────────────────────────────────────
 
 const NearbyBlocksSchema = z.object({
-  blockType: z.string().min(1).optional(),
+  blockTypes: z.array(z.string().min(1)).optional(),
   distance: z.number().int().min(1).max(256).default(16),
-  num: z.number().int().min(1).max(10000).default(100),
+  count: z.number().int().min(1).max(10000).default(100),
 }).strict();
 
 export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSchema>> = {
@@ -311,13 +312,13 @@ export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSch
   parameters: NearbyBlocksSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockType, distance, num } = params;
+    const { blockTypes, distance, count: num } = params;
 
     const positions = bot.findBlocks({
       matching: (block) => {
         if (block.name === "air" || block.name === "cave_air") return false;
-        if (blockType) {
-          return block.name === blockType;
+        if (blockTypes && blockTypes.length > 0) {
+          return blockTypes.includes(block.name);
         }
         return true;
       },
@@ -350,8 +351,10 @@ export const observeNearbyBlocks: SkillDefinition<z.infer<typeof NearbyBlocksSch
 // ─── observe.nearby_entities ────────────────────────────────────────────────
 
 const NearbyEntitiesSchema = z.object({
+  maxDistance: z.number().int().min(1).max(256).default(16),
   entityTypes: z.array(z.string().min(1)).optional(),
-  distance: z.number().int().min(1).max(256).default(16),
+  includePlayers: z.boolean().default(true),
+  count: z.number().int().min(1).max(1000).default(100),
 }).strict();
 
 export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitiesSchema>> = {
@@ -365,7 +368,7 @@ export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitie
   parameters: NearbyEntitiesSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { entityTypes, distance: maxDistance } = params;
+    const { maxDistance, entityTypes, includePlayers, count: maxCount } = params;
 
     const botPos = bot.entity.position;
     const entities: Array<{
@@ -379,6 +382,9 @@ export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitie
     for (const entity of Object.values(bot.entities)) {
       if (entity === bot.entity) continue;
       if (!entity.name) continue;
+
+      // Skip players if not included
+      if (!includePlayers && entity.type === "player") continue;
 
       const distance = botPos.distanceTo(entity.position);
       if (distance > maxDistance) continue;
@@ -402,12 +408,114 @@ export const observeNearbyEntities: SkillDefinition<z.infer<typeof NearbyEntitie
     return {
       ok: true,
       status: "success",
-      data: { entities },
+      data: { entities: entities.slice(0, maxCount) },
     };
   },
 };
 
 // ─── Export all observation skills ───────────────────────────────────────────
+
+// ─── observe.block_at ───────────────────────────────────────────────────────
+
+const BlockAtSchema = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  z: z.number().int(),
+}).strict();
+
+export const observeBlockAt: SkillDefinition<z.infer<typeof BlockAtSchema>> = {
+  name: "observe.block_at",
+  description: "Return block info at a specific position.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 5000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: BlockAtSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { x, y, z } = params;
+
+    const block = bot.blockAt(new Vec3(x, y, z));
+    if (!block) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "TARGET_NOT_FOUND", message: `No block data at ${x},${y},${z}`, retryable: false },
+      };
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        name: block.name,
+        position: { x: block.position.x, y: block.position.y, z: block.position.z },
+        hardness: block.hardness,
+        harvestable: block.harvestTools !== undefined,
+      },
+    };
+  },
+};
+
+// ─── observe.nearest_free_space ─────────────────────────────────────────────
+
+const NearestFreeSpaceSchema = z.object({
+  maxDistance: z.number().int().min(1).max(64).default(16),
+}).strict();
+
+export const observeNearestFreeSpace: SkillDefinition<z.infer<typeof NearestFreeSpaceSchema>> = {
+  name: "observe.nearest_free_space",
+  description: "Find the nearest air block suitable for block placement.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 5000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: NearestFreeSpaceSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { maxDistance } = params;
+
+    const emptyNames = ["air", "cave_air", "water", "lava", "grass", "short_grass", "tall_grass", "snow", "dead_bush", "fern"];
+
+    const positions = bot.findBlocks({
+      matching: (block) => block.name === "air" || block.name === "cave_air",
+      maxDistance,
+      count: 27,
+    });
+
+    for (const pos of positions) {
+      // Check if there's a solid block adjacent to place against
+      const neighbors = [
+        pos.offset(0, -1, 0), pos.offset(0, 1, 0),
+        pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
+        pos.offset(0, 0, 1), pos.offset(0, 0, -1),
+      ];
+      for (const n of neighbors) {
+        const nBlock = bot.blockAt(n);
+        if (nBlock && !emptyNames.includes(nBlock.name)) {
+          const dist = bot.entity.position.distanceTo(pos);
+          return {
+            ok: true,
+            status: "success",
+            data: {
+              position: { x: pos.x, y: pos.y, z: pos.z },
+              distance: Math.round(dist * 10) / 10,
+              adjacentBlock: nBlock.name,
+            },
+          };
+        }
+      }
+    }
+
+    return {
+      ok: false,
+      status: "failed",
+      error: { code: "TARGET_NOT_FOUND", message: `No free space with adjacent solid block found within ${maxDistance} blocks`, retryable: true },
+    };
+  },
+};
 
 export const observationSkills = [
   observeState,
@@ -416,4 +524,6 @@ export const observationSkills = [
   observeNearbyBlocks,
   observeNearbyEntities,
   observeCraftable,
+  observeBlockAt,
+  observeNearestFreeSpace,
 ];

@@ -616,6 +616,246 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
   },
 };
 
+// ─── inventory.place_block ──────────────────────────────────────────────────
+
+const PlaceBlockSchema = z.object({
+  blockType: z.string().min(1),
+  x: z.number().int().optional(),
+  y: z.number().int().optional(),
+  z: z.number().int().optional(),
+}).strict();
+
+export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchema>> = {
+  name: "inventory.place_block",
+  description: "Place a block at a given position or nearest free space.",
+  category: "inventory",
+  permissions: ["movement", "inventory", "block.place"],
+  timeoutMs: 30000,
+  busyPolicy: "cancel-current",
+  readOnly: false,
+  parameters: PlaceBlockSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { blockType, x, y, z } = params;
+
+    // Resolve item name (water → water_bucket, etc.)
+    let itemName = blockType;
+    if (itemName === "water") itemName = "water_bucket";
+    else if (itemName === "lava") itemName = "lava_bucket";
+    else if (itemName === "redstone_wire") itemName = "redstone";
+
+    // Find item in inventory
+    const item = bot.inventory.findInventoryItem(
+      bot.registry.itemsByName[itemName]?.id ?? -1, null, false,
+    );
+    if (!item) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "MISSING_ITEM", message: `You do not have any ${itemName} to place`, retryable: false },
+      };
+    }
+
+    // Determine target position
+    let targetPos: import("vec3").Vec3;
+    if (x !== undefined && y !== undefined && z !== undefined) {
+      targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+    } else {
+      // Find nearest free space
+      const airBlocks = bot.findBlocks({
+        matching: (block) => block.name === "air" || block.name === "cave_air",
+        maxDistance: 16,
+        count: 27,
+      });
+      // Filter for blocks that have a solid neighbor to place against
+      const emptyNames = ["air", "cave_air", "water", "lava", "grass", "short_grass", "tall_grass", "snow", "dead_bush", "fern"];
+      let found: import("vec3").Vec3 | null = null;
+      for (const pos of airBlocks) {
+        const neighbors = [
+          pos.offset(0, -1, 0), pos.offset(0, 1, 0),
+          pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
+          pos.offset(0, 0, 1), pos.offset(0, 0, -1),
+        ];
+        for (const n of neighbors) {
+          const nBlock = bot.blockAt(n);
+          if (nBlock && !emptyNames.includes(nBlock.name)) {
+            found = pos;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (!found) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "TARGET_NOT_FOUND", message: "No free space found nearby to place block", retryable: true },
+        };
+      }
+      targetPos = found;
+    }
+
+    // Navigate close enough
+    if (bot.entity.position.distanceTo(targetPos) > 4.5) {
+      await navigateTo(bot, targetPos.x, targetPos.y, targetPos.z, 4);
+    }
+
+    // Find a solid neighbor to place against
+    const emptyNames = ["air", "cave_air", "water", "lava", "grass", "short_grass", "tall_grass", "snow", "dead_bush", "fern"];
+    const dirs = [
+      new Vec3(0, -1, 0), new Vec3(0, 1, 0),
+      new Vec3(1, 0, 0), new Vec3(-1, 0, 0),
+      new Vec3(0, 0, 1), new Vec3(0, 0, -1),
+    ];
+    let buildOffBlock: ReturnType<typeof bot.blockAt> = null;
+    let faceVec: import("vec3").Vec3 | null = null;
+    for (const d of dirs) {
+      const neighborPos = targetPos.plus(d);
+      const block = bot.blockAt(neighborPos);
+      if (block && !emptyNames.includes(block.name)) {
+        buildOffBlock = block;
+        faceVec = new Vec3(-d.x, -d.y, -d.z);
+        break;
+      }
+    }
+    if (!buildOffBlock || !faceVec) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "UNSAFE_BLOCK", message: "Cannot place block here — nothing to attach to", retryable: false },
+      };
+    }
+
+    try {
+      // If target position has a non-air block in the way, try to break it first
+      const targetBlock = bot.blockAt(targetPos);
+      if (targetBlock && !emptyNames.includes(targetBlock.name)) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "UNSAFE_BLOCK", message: `Block ${targetBlock.name} is in the way at target position`, retryable: false },
+        };
+      }
+
+      await bot.equip(item, "hand");
+      await bot.lookAt(buildOffBlock.position.offset(0.5, 0.5, 0.5));
+      await bot.placeBlock(buildOffBlock, faceVec);
+
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          placed: true,
+          blockType,
+          position: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
+        },
+      };
+    } catch (err: unknown) {
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Block placement cancelled" };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "MINEFLAYER_ERROR", message: `Failed to place block: ${msg}`, retryable: true },
+      };
+    }
+  },
+};
+
+// ─── inventory.consume ─────────────────────────────────────────────────────
+
+const ConsumeSchema = z.object({
+  itemName: z.string().optional(),
+}).strict();
+
+export const inventoryConsume: SkillDefinition<z.infer<typeof ConsumeSchema>> = {
+  name: "inventory.consume",
+  description: "Eat or drink the best available food, or a specific item.",
+  category: "inventory",
+  permissions: ["inventory"],
+  timeoutMs: 15000,
+  busyPolicy: "reject-if-busy",
+  readOnly: false,
+  parameters: ConsumeSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { itemName } = params;
+
+    // Food value table for auto-eat ranking
+    const foodValues: Record<string, number> = {
+      golden_apple: 10, enchanted_golden_apple: 10,
+      cooked_beef: 8, steak: 8,
+      cooked_porkchop: 8, cooked_mutton: 6, cooked_salmon: 6,
+      cooked_chicken: 6, cooked_cod: 5, cooked_rabbit: 5,
+      bread: 5, baked_potato: 5, mushroom_stew: 6, beetroot_soup: 6,
+      rabbit_stew: 10, suspicious_stew: 6,
+      apple: 4, golden_carrot: 6, melon_slice: 2, sweet_berries: 2,
+      glow_berries: 2, carrot: 3, potato: 1, beetroot: 1,
+      raw_beef: 3, raw_porkchop: 3, raw_mutton: 2, raw_chicken: 2,
+      raw_salmon: 2, raw_cod: 2, raw_rabbit: 2,
+      cookie: 2, dried_kelp: 1, cake: 0,
+      pumpkin_pie: 4, chorus_fruit: 4,
+    };
+
+    let item: import("prismarine-item").Item | null = null;
+
+    if (itemName) {
+      item = bot.inventory.findInventoryItem(
+        bot.registry.itemsByName[itemName]?.id ?? -1, null, false,
+      );
+      if (!item) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "MISSING_ITEM", message: `You do not have any ${itemName} to consume`, retryable: false },
+        };
+      }
+    } else {
+      // Auto-eat: find best food in inventory
+      const inventoryItems = bot.inventory.items();
+      let bestItem: import("prismarine-item").Item | null = null;
+      let bestValue = -1;
+      for (const invItem of inventoryItems) {
+        const value = foodValues[invItem.name] ?? -1;
+        if (value > bestValue) {
+          bestValue = value;
+          bestItem = invItem;
+        }
+      }
+      if (!bestItem || bestValue <= 0) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "MISSING_ITEM", message: "No food found in inventory to consume", retryable: false },
+        };
+      }
+      item = bestItem;
+    }
+
+    try {
+      await bot.equip(item, "hand");
+      await bot.consume();
+      return {
+        ok: true,
+        status: "success",
+        data: { consumed: true, itemName: item.name },
+      };
+    } catch (err: unknown) {
+      if (checkCancelled(ctx)) {
+        return { ok: false, status: "cancelled", message: "Consumption cancelled" };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "MINEFLAYER_ERROR", message: `Failed to consume: ${msg}`, retryable: true },
+      };
+    }
+  },
+};
+
 // ─── Export all inventory skills ─────────────────────────────────────────────
 
 export const inventorySkills = [
@@ -626,4 +866,6 @@ export const inventorySkills = [
   inventoryViewChest,
   inventoryPutInChest,
   inventoryTakeFromChest,
+  inventoryPlaceBlock,
+  inventoryConsume,
 ];

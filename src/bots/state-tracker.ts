@@ -186,12 +186,18 @@ export class StateTracker extends EventEmitter {
       };
     }
 
-    // Weather
+    // Weather — prefer bot.isRaining/thunderState; fall back to bot.game
     if (bot.isRaining !== undefined) {
       s.weather = {
         isRaining: bot.isRaining,
-        rainState: bot.thunderState ?? 0,
+        rainState: (bot as any).rainState ?? bot.thunderState ?? 0,
         thunderState: bot.thunderState ?? 0,
+      };
+    } else if ((bot as any).game?.isRaining !== undefined) {
+      s.weather = {
+        isRaining: (bot as any).game.isRaining,
+        rainState: (bot as any).game.thunderState ?? 0,
+        thunderState: (bot as any).game.thunderState ?? 0,
       };
     }
 
@@ -244,6 +250,24 @@ export class StateTracker extends EventEmitter {
       };
     }
 
+    // Armor and offhand slots via bot.entity (equipment manager)
+    const equip = (bot as any).equipment;
+    if (equip) {
+      const equipSlot = (item: any) => item ? {
+        slot: item.slot,
+        name: item.name,
+        displayName: item.displayName ?? item.name,
+        type: item.type,
+        count: item.count,
+      } : undefined;
+
+      equipment.offHand = equipSlot(equip.offhand);
+      equipment.head = equipSlot(equip.head);
+      equipment.torso = equipSlot(equip.torso);
+      equipment.legs = equipSlot(equip.legs);
+      equipment.feet = equipSlot(equip.feet);
+    }
+
     return {
       botId: this.state.botId,
       selectedSlot: bot.quickBarSlot ?? 0,
@@ -262,13 +286,14 @@ export class StateTracker extends EventEmitter {
     if (!bot?.entity?.position) return undefined;
 
     const botPos = bot.entity.position;
+    const radius = 48;
     const players: EntitySummary[] = [];
     const entities: EntitySummary[] = [];
 
     for (const entity of Object.values(bot.entities)) {
       if (!entity?.position) continue;
       const dist = botPos.distanceTo(entity.position);
-      if (dist > 48) continue;
+      if (dist > radius) continue;
 
       const summary: EntitySummary = {
         id: entity.id,
@@ -292,12 +317,44 @@ export class StateTracker extends EventEmitter {
       }
     }
 
+    // Populate nearby blocks (sampling approach for performance)
+    const blocks: BlockSummary[] = [];
+    const seenBlockTypes = new Set<string>();
+    const scanRange = 16;
+    const sampleStep = 3;
+
+    for (let dx = -scanRange; dx <= scanRange; dx += sampleStep) {
+      for (let dy = -scanRange; dy <= scanRange; dy += sampleStep) {
+        for (let dz = -scanRange; dz <= scanRange; dz += sampleStep) {
+          try {
+            const block = bot.blockAt(botPos.offset(dx, dy, dz));
+            if (!block || block.name === "air" || block.name === "cave_air") continue;
+            if (seenBlockTypes.has(block.name)) continue;
+            seenBlockTypes.add(block.name);
+
+            const dist = botPos.distanceTo(block.position);
+            blocks.push({
+              name: block.name,
+              displayName: block.displayName ?? block.name,
+              type: block.stateId ?? 0,
+              position: { x: block.position.x, y: block.position.y, z: block.position.z },
+              distance: Math.round(dist * 100) / 100,
+              hardness: block.hardness,
+              harvestable: block.harvestTools !== undefined,
+            });
+          } catch {
+            // blocks may not be loaded
+          }
+        }
+      }
+    }
+
     return {
       botId: this.state.botId,
-      radius: 48,
+      radius,
       players,
       entities,
-      blocks: [], // blocks are queried on-demand via observation skills
+      blocks,
       updatedAt: new Date().toISOString(),
     };
   }

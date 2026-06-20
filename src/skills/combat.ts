@@ -214,7 +214,7 @@ export const combatAttackNearest: SkillDefinition<z.infer<typeof AttackNearestSc
 // ─── combat.defend_self ─────────────────────────────────────────────────────
 
 const DefendSelfSchema = z.object({
-  distance: z.number().min(1).max(64).default(9),
+  range: z.number().min(1).max(64).default(9),
 }).strict();
 
 export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>> = {
@@ -228,7 +228,7 @@ export const combatDefendSelf: SkillDefinition<z.infer<typeof DefendSelfSchema>>
   parameters: DefendSelfSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { distance } = params;
+    const { range: distance } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "defense", message: "Defending self" });
 
