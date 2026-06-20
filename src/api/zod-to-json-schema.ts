@@ -64,8 +64,14 @@ export function zodSchemaToJsonSchema(schema: ZodTypeAny): Record<string, unknow
   const typeName = getZodTypeName(schema);
 
   switch (typeName) {
-    case ZOD_TYPES.ZodString:
-      return { type: "string" };
+    case ZOD_TYPES.ZodString: {
+      const jsonSchema: Record<string, unknown> = { type: "string" };
+      const min = getCheckValue(schema, "min");
+      const max = getCheckValue(schema, "max");
+      if (min !== undefined) jsonSchema["minLength"] = min;
+      if (max !== undefined) jsonSchema["maxLength"] = max;
+      return jsonSchema;
+    }
 
     case ZOD_TYPES.ZodNumber: {
       const jsonSchema: Record<string, unknown> = { type: "number" };
@@ -200,6 +206,13 @@ export function zodSchemaToJsonSchema(schema: ZodTypeAny): Record<string, unknow
       if (required.length > 0) {
         result["required"] = required;
       }
+
+      // .strict() → additionalProperties: false
+      const unknownKeys = def["unknownKeys"];
+      if (unknownKeys === "strict") {
+        result["additionalProperties"] = false;
+      }
+
       return result;
     }
 
@@ -208,7 +221,16 @@ export function zodSchemaToJsonSchema(schema: ZodTypeAny): Record<string, unknow
       const def = schema._def as Record<string, unknown>;
       const innerType = def["schema"] as ZodTypeAny | undefined;
       if (innerType) {
-        return zodSchemaToJsonSchema(innerType);
+        const result = zodSchemaToJsonSchema(innerType);
+        // Extract refinement description if present
+        const effect = def["effect"] as Record<string, unknown> | undefined;
+        if (effect && effect["type"] === "refinement" && typeof effect["message"] === "string") {
+          const existing = result["description"];
+          result["description"] = existing
+            ? `${existing} (${effect["message"]})`
+            : effect["message"];
+        }
+        return result;
       }
       return {};
     }

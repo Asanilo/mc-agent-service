@@ -226,6 +226,17 @@ export type CancelJobResponse = z.infer<typeof CancelJobResponseSchema>;
 
 // ─── POST /bots/{id}/chat — Send Chat ───────────────────────────────────────
 
+// ─── PATCH /bots/{id}/modes/{name} — Toggle Mode ─────────────────────────
+
+export const ModesPatchRequestSchema = z
+  .object({
+    enabled: z.boolean(),
+    paused: z.boolean().optional(),
+    reason: z.string().max(512).optional(),
+  })
+  .strict();
+export type ModesPatchRequest = z.infer<typeof ModesPatchRequestSchema>;
+
 export const SendChatRequestSchema = z
   .object({
     message: z.string().min(1).max(256),

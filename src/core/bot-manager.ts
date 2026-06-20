@@ -63,6 +63,7 @@ export class BotManager {
   private readonly serverConfig: ServerConfig;
   private readonly workerPath: string;
   private readonly destroyWaiters = new Map<string, () => void>();
+  private readonly destroyTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
   private jobEventHandler: ((event: WorkerEvent) => void) | null = null;
 
   constructor(opts: BotManagerOptions) {
@@ -216,7 +217,8 @@ export class BotManager {
         this.destroyWaiters.set(id, resolve);
       });
       const timeoutPromise = new Promise<void>((resolve) => {
-        setTimeout(() => {
+        const timer = setTimeout(() => {
+          this.destroyTimeouts.delete(id);
           // Force-terminate if still alive
           if (this.destroyWaiters.has(id)) {
             this.destroyWaiters.delete(id);
@@ -228,6 +230,7 @@ export class BotManager {
           }
           resolve();
         }, 5000);
+        this.destroyTimeouts.set(id, timer);
       });
       await Promise.race([exitPromise, timeoutPromise]);
     }
@@ -328,6 +331,13 @@ export class BotManager {
       this.logger.info({ botId: record.id, code }, "Worker exited");
       record.worker = null;
 
+      // Clear any pending destroy timeout
+      const destroyTimer = this.destroyTimeouts.get(record.id);
+      if (destroyTimer) {
+        clearTimeout(destroyTimer);
+        this.destroyTimeouts.delete(record.id);
+      }
+
       // Resolve any pending destroy-wait promise
       const waiter = this.destroyWaiters.get(record.id);
       if (waiter) {
@@ -335,7 +345,7 @@ export class BotManager {
         this.destroyWaiters.delete(record.id);
       }
 
-      if (record.status !== "destroyed" && record.status !== "stopping" && record.status !== "failed") {
+      if (record.status !== "destroyed" && record.status !== "stopping") {
         // Unexpected exit — fail any active job
         if (record.currentJobId) {
           const jobId = record.currentJobId;

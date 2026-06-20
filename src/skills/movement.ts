@@ -17,19 +17,30 @@ import { Vec3 } from "vec3";
 
 
 function createMovements(bot: Bot): InstanceType<typeof Movements> {
-
-  const movements = createMovements(bot);
-
-  // Creative mode: enable flying
+  const movements = new Movements(bot);
 
   if (bot.game.gameMode === "creative") {
-
-    movements.canFly = true;
-
+    movements.canOpenDoors = false;
+    movements.canDig = false;
   }
 
   return movements;
+}
 
+async function enableCreativeFlying(bot: Bot): Promise<void> {
+  if (bot.game.gameMode !== "creative") return;
+  if (bot.creative?.startFlying) {
+    bot.creative.startFlying();
+  } else {
+    // Fallback: simulate double-jump
+    bot.setControlState("jump", true);
+    await new Promise((r) => setTimeout(r, 50));
+    bot.setControlState("jump", false);
+    await new Promise((r) => setTimeout(r, 50));
+    bot.setControlState("jump", true);
+    await new Promise((r) => setTimeout(r, 50));
+    bot.setControlState("jump", false);
+  }
 }
 
 
@@ -64,6 +75,8 @@ export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> =
     const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
     const goal = new goals.GoalNear(x, y, z, minDistance);
+
+    await enableCreativeFlying(bot);
 
     try {
       await bot.pathfinder.goto(goal);
@@ -130,6 +143,8 @@ export const moveToPlayer: SkillDefinition<z.infer<typeof ToPlayerSchema>> = {
     const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
     const goal = new goals.GoalFollow(entity, distance);
+
+    await enableCreativeFlying(bot);
 
     try {
       await bot.pathfinder.goto(goal);
@@ -340,6 +355,8 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
 
     const movements = createMovements(bot);
     bot.pathfinder.setMovements(movements);
+
+    await enableCreativeFlying(bot);
 
     try {
       await bot.pathfinder.goto(new goals.GoalNear(blockPos.x, blockPos.y, blockPos.z, minDistance));

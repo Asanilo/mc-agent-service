@@ -43,7 +43,13 @@ export class SlidingWindowLimiter {
     const entry = this.windows.get(key);
 
     if (!entry || entry.windowStart < prevWindowStart) {
-      // No data or stale — allow and start fresh
+      // No data or stale — but still check previous window at boundary
+      const prevEntry = this.windows.get(`${key}:prev`);
+      const prevCount = prevEntry?.windowStart === prevWindowStart ? prevEntry.count : 0;
+      if (prevCount >= maxRequests) {
+        const retryAfterMs = this.windowMs;
+        return { allowed: false, retryAfterMs: Math.max(retryAfterMs, 100) };
+      }
       this.windows.set(key, { count: 1, windowStart });
       return { allowed: true };
     }

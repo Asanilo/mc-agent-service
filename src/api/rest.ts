@@ -21,6 +21,7 @@ import {
   SendChatRequestSchema,
   ListJobsQuerySchema,
   LookRequestSchema,
+  ModesPatchRequestSchema,
   type ErrorResponse,
   type ErrorCode,
 } from "../types/api.js";
@@ -501,6 +502,12 @@ export function createRestRouter(opts: RestRouterOptions): Router {
     const botId = param(req, "botId");
     const modeName = param(req, "modeName");
 
+    const parsed = ModesPatchRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      sendError(res, 400, "VALIDATION_FAILED", "Invalid request body", parsed.error.issues);
+      return;
+    }
+
     try {
       botManager.getBot(botId);
 
@@ -516,11 +523,11 @@ export function createRestRouter(opts: RestRouterOptions): Router {
         return;
       }
 
-      const newEnabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : mode.enabled;
-      const newPaused = typeof req.body?.paused === "boolean" ? req.body.paused : mode.paused;
+      const newEnabled = parsed.data.enabled;
+      const newPaused = parsed.data.paused ?? mode.paused;
 
       // Send mode toggle to worker via BotManager
-      botManager.toggleMode(botId, modeName, newEnabled, newPaused, req.body?.reason);
+      botManager.toggleMode(botId, modeName, newEnabled, newPaused, parsed.data.reason);
 
       logger.info({ botId, modeName, enabled: newEnabled, paused: newPaused }, "Mode toggle requested");
 

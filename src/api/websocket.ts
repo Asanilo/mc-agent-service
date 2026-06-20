@@ -112,6 +112,10 @@ export class WsManager {
         }
       }
 
+      // Strip token from URL to prevent logging sensitive query params
+      url.searchParams.delete("token");
+      request.url = url.pathname + (url.searchParams.toString() ? `?${url.searchParams}` : "");
+
       this.wss!.handleUpgrade(request, sock, buf, (ws) => {
         this.wss!.emit("connection", ws, request);
       });
