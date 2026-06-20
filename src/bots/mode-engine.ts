@@ -449,13 +449,6 @@ export function createUnstuckMode(): ModeDefinition {
     interruptsAll: true,
     interruptsSkills: [],
     update: (ctx) => {
-      if (ctx.isIdle) {
-        prevPosition = null;
-        stuckTime = 0;
-        lastEscalation = 0;
-        return;
-      }
-
       const bot = ctx.bot;
       const pos = bot.entity.position;
       const now = Date.now();

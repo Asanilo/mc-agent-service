@@ -294,7 +294,7 @@ export class BotRuntime {
       bot,
       mcData,
       isIdle: () => !this.skillExecutor.isRunning(),
-      currentSkill: () => null, // could track current skill name
+      currentSkill: () => this.skillExecutor.getCurrentJobId() ? "running" : null,
       onInterrupt: () => {
         this.skillExecutor.cancelCurrent("mode_interrupt");
         // Stop pathfinder and pvp
