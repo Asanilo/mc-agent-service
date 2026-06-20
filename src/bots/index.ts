@@ -14,6 +14,8 @@ export {
   createSelfPreservationMode,
   createSelfDefenseMode,
   createUnstuckMode,
+  createIdleStaringMode,
+  createElbowRoomMode,
 } from "./mode-engine.js";
 export type {
   ModeDefinition,

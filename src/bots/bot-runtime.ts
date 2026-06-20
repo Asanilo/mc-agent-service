@@ -11,6 +11,8 @@ import {
   createSelfPreservationMode,
   createSelfDefenseMode,
   createUnstuckMode,
+  createIdleStaringMode,
+  createElbowRoomMode,
 } from "./mode-engine.js";
 import type { SkillDefinition, SkillExecutionContext } from "./skill-executor.js";
 
@@ -206,6 +208,8 @@ export class BotRuntime {
     this.modeEngine.registerMode(createSelfPreservationMode());
     this.modeEngine.registerMode(createSelfDefenseMode());
     this.modeEngine.registerMode(createUnstuckMode());
+    this.modeEngine.registerMode(createIdleStaringMode());
+    this.modeEngine.registerMode(createElbowRoomMode());
   }
 
   // ── Private: bind adapter events ────────────────────────────────────────
@@ -304,6 +308,12 @@ export class BotRuntime {
         } catch {
           /* ignore */
         }
+      },
+      onRequestAction: (_skillName, _params) => {
+        // Actions requested by modes are logged but execution
+        // is handled by the mode's direct bot API calls.
+        // The skill executor integration can be added when
+        // the requestAction pipeline is fully wired.
       },
       onTriggered: (mode, reason) => {
         this.eventCallbacks.modeTriggered?.(mode, reason);

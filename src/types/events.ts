@@ -125,6 +125,34 @@ export const ModeTriggeredDataSchema = z
   .strict();
 export type ModeTriggeredData = z.infer<typeof ModeTriggeredDataSchema>;
 
+export const ModeActionStartedDataSchema = z
+  .object({
+    mode: z.string(),
+    action: z.string(),
+    params: z.unknown().optional(),
+  })
+  .strict();
+export type ModeActionStartedData = z.infer<typeof ModeActionStartedDataSchema>;
+
+export const ModeActionCompletedDataSchema = z
+  .object({
+    mode: z.string(),
+    action: z.string(),
+    success: z.boolean(),
+    result: z.unknown().optional(),
+    durationMs: z.number().int().nonnegative(),
+  })
+  .strict();
+export type ModeActionCompletedData = z.infer<typeof ModeActionCompletedDataSchema>;
+
+export const JobResumedDataSchema = z
+  .object({
+    jobId: z.string(),
+    reason: z.string(),
+  })
+  .strict();
+export type JobResumedData = z.infer<typeof JobResumedDataSchema>;
+
 export const ErrorRaisedDataSchema = z
   .object({
     error: ServiceErrorObjectSchema,

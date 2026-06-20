@@ -1,6 +1,7 @@
 import type { Bot } from "mineflayer";
 import type { IndexedData } from "minecraft-data";
 import type { ModeStatus } from "../types/bot.js";
+import type { Entity } from "prismarine-entity";
 
 // ─── Mode Definition ────────────────────────────────────────────────────────
 
@@ -26,6 +27,7 @@ export interface ModeContext {
   isIdle: boolean;
   currentSkillName: string | null;
   interruptCurrentAction: () => void;
+  requestAction: (skillName: string, params?: Record<string, unknown>) => void;
   log: (message: string) => void;
 }
 
@@ -54,6 +56,7 @@ export class ModeEngine {
   private bot: Bot | null = null;
   private mcData: IndexedData | null = null;
   private onInterruptRequest: (() => void) | null = null;
+  private onRequestAction: ((skillName: string, params?: Record<string, unknown>) => void) | null = null;
   private isIdleFn: (() => boolean) | null = null;
   private currentSkillFn: (() => string | null) | null = null;
   private onModeTriggered: ((mode: string, reason: string) => void) | null = null;
@@ -81,6 +84,7 @@ export class ModeEngine {
     bot: Bot;
     mcData: IndexedData;
     onInterrupt: () => void;
+    onRequestAction: (skillName: string, params?: Record<string, unknown>) => void;
     isIdle: () => boolean;
     currentSkill: () => string | null;
     onTriggered: (mode: string, reason: string) => void;
@@ -89,6 +93,7 @@ export class ModeEngine {
     this.bot = opts.bot;
     this.mcData = opts.mcData;
     this.onInterruptRequest = opts.onInterrupt;
+    this.onRequestAction = opts.onRequestAction;
     this.isIdleFn = opts.isIdle;
     this.currentSkillFn = opts.currentSkill;
     this.onModeTriggered = opts.onTriggered;
@@ -274,6 +279,10 @@ export class ModeEngine {
         interruptCurrentAction: () => {
           this.requestInterrupt(name, def.description);
         },
+        requestAction: (skillName, params) => {
+          this.requestInterrupt(name, def.description);
+          this.onRequestAction?.(skillName, params);
+        },
         log: (msg) => {
           this.logFn?.(`[mode:${name}] ${msg}`);
         },
@@ -310,6 +319,7 @@ export class ModeEngine {
 
 /**
  * Self-preservation: flee when health is critically low.
+ * Priority 100 — highest priority, overrides everything.
  */
 export function createSelfPreservationMode(): ModeDefinition {
   return {
@@ -328,15 +338,14 @@ export function createSelfPreservationMode(): ModeDefinition {
 
       if (!block || !blockAbove) return;
 
-      // In water — jump
-      if (blockAbove.name === "water") {
-        if (!bot.pathfinder?.goal) {
-          bot.setControlState("jump", true);
-        }
+      // In water/drowning — swim up
+      if (block.name === "water" || blockAbove.name === "water") {
+        bot.setControlState("jump", true);
+        ctx.log("Swimming up to avoid drowning");
         return;
       }
 
-      // In lava/fire — try to escape
+      // In lava/fire — flee immediately via move.away skill
       if (
         block.name === "lava" ||
         block.name === "fire" ||
@@ -344,18 +353,17 @@ export function createSelfPreservationMode(): ModeDefinition {
         blockAbove.name === "fire"
       ) {
         ctx.log("On fire/lava — fleeing!");
-        ctx.interruptCurrentAction();
+        ctx.requestAction("move.away", { x: pos.x, y: pos.y, z: pos.z, distance: 10 });
+        ctx.log("Fled to safety");
         return;
       }
 
-      // Low health and recently damaged
+      // Low health (< 6) and recently damaged — flee
       const lastDamage = (bot as unknown as { lastDamageTime?: number }).lastDamageTime ?? 0;
-      if (
-        Date.now() - lastDamage < 3000 &&
-        (bot.health < 5 || bot.health <= 2)
-      ) {
+      if (Date.now() - lastDamage < 3000 && bot.health < 6) {
         ctx.log("Low health under attack — fleeing!");
-        ctx.interruptCurrentAction();
+        ctx.requestAction("move.away", { x: pos.x, y: pos.y, z: pos.z, distance: 10 });
+        ctx.log("Fled to safety");
       }
     },
   };
@@ -363,8 +371,11 @@ export function createSelfPreservationMode(): ModeDefinition {
 
 /**
  * Self-defense: auto-attack hostile mobs nearby.
+ * Priority 80 — can interrupt skills but defers to self_preservation.
  */
 export function createSelfDefenseMode(): ModeDefinition {
+  let defeatedCount = 0;
+
   return {
     name: "self_defense",
     description: "Attack nearby hostile mobs. Interrupts some actions.",
@@ -377,29 +388,57 @@ export function createSelfDefenseMode(): ModeDefinition {
       const bot = ctx.bot;
       const pos = bot.entity.position;
 
-      // Find nearest hostile mob within 8 blocks
-      const hostile = Object.values(bot.entities).find((entity) => {
-        if (!entity?.position || !entity.name) return false;
-        const dist = pos.distanceTo(entity.position);
-        if (dist > 8) return false;
-        return isHostile(entity);
-      });
-
-      if (hostile) {
-        ctx.log(`Hostile ${hostile.name} nearby — defending!`);
-        ctx.interruptCurrentAction();
+      // If health drops below 4 during combat, flee instead of fighting
+      if (bot.health < 4) {
+        ctx.log("Health critical during combat — fleeing!");
+        ctx.requestAction("move.away", { x: pos.x, y: pos.y, z: pos.z, distance: 10 });
+        return;
       }
+
+      // Find nearest hostile mob within 5 blocks
+      let nearestHostile: Entity | null = null;
+      let nearestDist = Infinity;
+
+      for (const entity of Object.values(bot.entities)) {
+        if (!entity?.position || !entity.name) continue;
+        if (entity === bot.entity) continue;
+        const dist = pos.distanceTo(entity.position);
+        if (dist > 5 || dist >= nearestDist) continue;
+        if (!isHostile(entity)) continue;
+        nearestHostile = entity;
+        nearestDist = dist;
+      }
+
+      if (nearestHostile) {
+        ctx.log(`Hostile ${nearestHostile.name} nearby — attacking!`);
+        ctx.interruptCurrentAction();
+        try {
+          bot.attack(nearestHostile);
+          // Check if entity was defeated (no longer in world)
+          if (!bot.entities[nearestHostile.id]) {
+            defeatedCount++;
+            ctx.log(`Defeated hostile #${defeatedCount}: ${nearestHostile.name}`);
+          }
+        } catch {
+          // Entity may have despawned mid-attack
+        }
+      }
+    },
+    onUnpause: () => {
+      // defeatedCount persists across pauses
     },
   };
 }
 
 /**
  * Unstuck: detect when bot hasn't moved and try to free it.
+ * Priority 90 — escalates through jump, random movement, block breaking, then interrupt.
  */
 export function createUnstuckMode(): ModeDefinition {
   let prevPosition: { x: number; y: number; z: number } | null = null;
   let stuckTime = 0;
   let lastCheck = Date.now();
+  let lastEscalation = 0; // 0=none, 1=jump, 2=random move, 3=dig, 4=interrupt
 
   return {
     name: "unstuck",
@@ -413,6 +452,7 @@ export function createUnstuckMode(): ModeDefinition {
       if (ctx.isIdle) {
         prevPosition = null;
         stuckTime = 0;
+        lastEscalation = 0;
         return;
       }
 
@@ -431,6 +471,7 @@ export function createUnstuckMode(): ModeDefinition {
         } else {
           stuckTime = 0;
           prevPosition = { x: pos.x, y: pos.y, z: pos.z };
+          lastEscalation = 0;
         }
       } else {
         prevPosition = { x: pos.x, y: pos.y, z: pos.z };
@@ -438,10 +479,48 @@ export function createUnstuckMode(): ModeDefinition {
 
       lastCheck = now;
 
-      if (stuckTime > 20) {
-        ctx.log("Stuck for 20s — trying to get unstuck!");
+      // Progressive escalation based on stuck duration
+      if (stuckTime > 5 && lastEscalation < 1) {
+        // Level 1: try jumping
+        ctx.log("Stuck for 5s — jumping!");
+        bot.setControlState("jump", true);
+        lastEscalation = 1;
+      } else if (stuckTime > 10 && lastEscalation < 2) {
+        // Level 2: pick a random direction and move
+        ctx.log("Stuck for 10s — trying random movement!");
+        const directions = [
+          ["forward", "left"],
+          ["forward", "right"],
+          ["back", "left"],
+          ["back", "right"],
+        ] as const;
+        const pick = directions[Math.floor(Math.random() * directions.length)]!;
+        bot.setControlState(pick[0], true);
+        bot.setControlState(pick[1], true);
+        lastEscalation = 2;
+      } else if (stuckTime > 15 && lastEscalation < 3) {
+        // Level 3: try to break block at bot's position
+        ctx.log("Stuck for 15s — trying to break block!");
+        const blockAtFeet = bot.blockAt(pos);
+        const blockAbove = bot.blockAt(pos.offset(0, 1, 0));
+        const targetBlock =
+          blockAtFeet && blockAtFeet.name !== "air" && blockAtFeet.name !== "bedrock"
+            ? blockAtFeet
+            : blockAbove && blockAbove.name !== "air" && blockAbove.name !== "bedrock"
+              ? blockAbove
+              : null;
+        if (targetBlock) {
+          void bot.dig(targetBlock).catch(() => {
+            /* ignore dig errors */
+          });
+        }
+        lastEscalation = 3;
+      } else if (stuckTime > 20) {
+        // Level 4: give up and interrupt
+        ctx.log("Cannot get unstuck");
         stuckTime = 0;
         prevPosition = null;
+        lastEscalation = 0;
         ctx.interruptCurrentAction();
       }
     },
@@ -449,6 +528,106 @@ export function createUnstuckMode(): ModeDefinition {
       prevPosition = null;
       stuckTime = 0;
       lastCheck = Date.now();
+      lastEscalation = 0;
+    },
+  };
+}
+
+/**
+ * Idle staring: when no job is active, periodically look at nearest entity.
+ * Priority 10 — low priority, cosmetic behavior.
+ */
+export function createIdleStaringMode(): ModeDefinition {
+  let lastLookTime = 0;
+  let nextCooldown = 5000; // randomized 5-10s
+
+  return {
+    name: "idle_staring",
+    description: "Periodically look at nearest entity when idle.",
+    priority: 10,
+    enabled: true,
+    permissions: [],
+    interruptsAll: false,
+    interruptsSkills: [],
+    update: (ctx) => {
+      if (!ctx.isIdle) return;
+
+      const now = Date.now();
+      if (now - lastLookTime < nextCooldown) return;
+
+      const bot = ctx.bot;
+      const pos = bot.entity.position;
+
+      // Find nearest entity within 10 blocks (excluding self)
+      let nearest: Entity | null = null;
+      let nearestDist = Infinity;
+
+      for (const entity of Object.values(bot.entities)) {
+        if (!entity?.position || entity === bot.entity) continue;
+        const dist = pos.distanceTo(entity.position);
+        if (dist > 10 || dist >= nearestDist) continue;
+        nearest = entity;
+        nearestDist = dist;
+      }
+
+      if (nearest) {
+        // Look at the entity's head level
+        const lookTarget = nearest.position.offset(0, nearest.height, 0);
+        void bot.lookAt(lookTarget);
+        lastLookTime = now;
+        // Randomize next cooldown between 5-10 seconds
+        nextCooldown = 5000 + Math.floor(Math.random() * 5000);
+      }
+    },
+    onUnpause: () => {
+      lastLookTime = 0;
+    },
+  };
+}
+
+/**
+ * Elbow room: when a player is too close and bot is idle, move away slightly.
+ * Priority 5 — lowest priority, only runs when idle.
+ */
+export function createElbowRoomMode(): ModeDefinition {
+  let lastMoveTime = 0;
+
+  return {
+    name: "elbow_room",
+    description: "Move away when players are too close while idle.",
+    priority: 5,
+    enabled: true,
+    permissions: ["move"],
+    interruptsAll: false,
+    interruptsSkills: [],
+    update: (ctx) => {
+      if (!ctx.isIdle) return;
+
+      const now = Date.now();
+      if (now - lastMoveTime < 3000) return; // Only trigger every 3 seconds
+
+      const bot = ctx.bot;
+      const pos = bot.entity.position;
+
+      // Check if any player entity is within 1.5 blocks
+      for (const entity of Object.values(bot.entities)) {
+        if (!entity?.position || entity === bot.entity) continue;
+        if (entity.type !== "player") continue;
+        const dist = pos.distanceTo(entity.position);
+        if (dist < 1.5) {
+          ctx.log("Player too close — giving space");
+          bot.setControlState("back", true);
+          // Release after 500ms to take a small step back
+          setTimeout(() => {
+            bot.setControlState("back", false);
+          }, 500);
+          lastMoveTime = now;
+          return;
+        }
+      }
+    },
+    onUnpause: () => {
+      lastMoveTime = 0;
     },
   };
 }
