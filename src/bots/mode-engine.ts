@@ -460,30 +460,7 @@ export function createUnstuckMode(): ModeDefinition {
       const pos = bot.entity.position;
       const now = Date.now();
 
-      if (ctx.isIdle) {
-        // Idle: check if taking damage (health dropping = stuck/suffocating/attacked)
-        const healthDiff = prevHealth - bot.health;
-        prevHealth = bot.health;
-
-        if (healthDiff > 0 && bot.health < 15) {
-          // Losing health while idle — try to get free
-          ctx.log(`Taking damage while idle (health: ${bot.health}) — trying to escape!`);
-          bot.setControlState("jump", true);
-          setTimeout(() => bot.setControlState("jump", false), 500);
-          // Try random movement
-          const dir = Math.random() > 0.5 ? "forward" : "back";
-          bot.setControlState(dir, true);
-          setTimeout(() => bot.setControlState(dir, false), 800);
-        }
-
-        prevPosition = null;
-        stuckTime = 0;
-        lastEscalation = 0;
-        lastCheck = now;
-        return;
-      }
-
-      // Job running: check position-based stuck detection
+      // Track position even when idle
       if (prevPosition) {
         const dx = pos.x - prevPosition.x;
         const dy = pos.y - prevPosition.y;
@@ -503,13 +480,17 @@ export function createUnstuckMode(): ModeDefinition {
 
       lastCheck = now;
 
-      // Progressive escalation based on stuck duration
-      if (stuckTime > 5 && lastEscalation < 1) {
-        ctx.log("Stuck for 5s — jumping!");
+      // When idle, use longer threshold (15s) and only jump, don't do random moves
+      const threshold = ctx.isIdle ? 15 : 5;
+
+      if (stuckTime > threshold && lastEscalation < 1) {
+        ctx.log(`Stuck for ${threshold}s — jumping!`);
         bot.setControlState("jump", true);
         setTimeout(() => bot.setControlState("jump", false), 500);
         lastEscalation = 1;
-      } else if (stuckTime > 10 && lastEscalation < 2) {
+      } else if (!ctx.isIdle && stuckTime > 10 && lastEscalation < 2) {
+
+} else if (!ctx.isIdle && stuckTime > 10 && lastEscalation < 2) {
         ctx.log("Stuck for 10s — trying random movement!");
         const directions = [
           ["forward", "left"],
@@ -629,6 +610,10 @@ export function createElbowRoomMode(): ModeDefinition {
       });
 
       if (player) {
+        // Look at the player first
+        const target = player.position.offset(0, (player as any).height ?? 1.6, 0);
+        bot.lookAt(target).catch(() => {});
+        // Then step back
         bot.setControlState("back", true);
         setTimeout(() => bot.setControlState("back", false), 500);
         lastStepTime = now;
