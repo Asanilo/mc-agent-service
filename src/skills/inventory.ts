@@ -620,14 +620,14 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
 
 const PlaceBlockSchema = z.object({
   blockType: z.string().min(1),
-  x: z.number().int().optional(),
-  y: z.number().int().optional(),
-  z: z.number().int().optional(),
+  x: z.number().int(),
+  y: z.number().int(),
+  z: z.number().int(),
 }).strict();
 
 export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchema>> = {
   name: "inventory.place_block",
-  description: "Place a block at a given position or nearest free space.",
+  description: "Place a block at the specified coordinates. Requires exact x/y/z.",
   category: "inventory",
   permissions: ["movement", "inventory", "block.place"],
   timeoutMs: 30000,
@@ -637,17 +637,16 @@ export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchem
   async run(ctx, params) {
     const bot = ctx.bot;
     const { blockType, x, y, z } = params;
+    const targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
 
-    // Resolve item name (water → water_bucket, etc.)
+    // Resolve item name
     let itemName = blockType;
     if (itemName === "water") itemName = "water_bucket";
     else if (itemName === "lava") itemName = "lava_bucket";
     else if (itemName === "redstone_wire") itemName = "redstone";
 
     // Find item in inventory
-    const item = bot.inventory.findInventoryItem(
-      bot.registry.itemsByName[itemName]?.id ?? -1, null, false,
-    );
+    const item = (bot.inventory.findInventoryItem as any)(itemName);
     if (!item) {
       return {
         ok: false,
@@ -656,52 +655,26 @@ export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchem
       };
     }
 
-    // Determine target position
-    let targetPos: import("vec3").Vec3;
-    if (x !== undefined && y !== undefined && z !== undefined) {
-      targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
-    } else {
-      // Find nearest free space
-      const airBlocks = bot.findBlocks({
-        matching: (block) => block.name === "air" || block.name === "cave_air",
-        maxDistance: 16,
-        count: 27,
-      });
-      // Filter for blocks that have a solid neighbor to place against
-      const emptyNames = ["air", "cave_air", "water", "lava", "grass", "short_grass", "tall_grass", "snow", "dead_bush", "fern"];
-      let found: import("vec3").Vec3 | null = null;
-      for (const pos of airBlocks) {
-        const neighbors = [
-          pos.offset(0, -1, 0), pos.offset(0, 1, 0),
-          pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
-          pos.offset(0, 0, 1), pos.offset(0, 0, -1),
-        ];
-        for (const n of neighbors) {
-          const nBlock = bot.blockAt(n);
-          if (nBlock && !emptyNames.includes(nBlock.name)) {
-            found = pos;
-            break;
-          }
-        }
-        if (found) break;
-      }
-      if (!found) {
-        return {
-          ok: false,
-          status: "failed",
-          error: { code: "TARGET_NOT_FOUND", message: "No free space found nearby to place block", retryable: true },
-        };
-      }
-      targetPos = found;
+    // Check if target is already the right block
+    const targetBlock = bot.blockAt(targetPos);
+    if (!targetBlock) {
+      return { ok: false, status: "failed", error: { code: "TARGET_NOT_FOUND", message: "Cannot read target position", retryable: false } };
+    }
+    if (targetBlock.name === blockType) {
+      return { ok: true, status: "success", data: { placed: false, message: `${blockType} already at position` } };
     }
 
-    // Navigate close enough
-    if (bot.entity.position.distanceTo(targetPos) > 4.5) {
-      await navigateTo(bot, targetPos.x, targetPos.y, targetPos.z, 4);
-    }
-
-    // Find a solid neighbor to place against
+    // If target is not empty, fail (don't auto-break)
     const emptyNames = ["air", "cave_air", "water", "lava", "grass", "short_grass", "tall_grass", "snow", "dead_bush", "fern"];
+    if (!emptyNames.includes(targetBlock.name)) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "UNSAFE_BLOCK", message: `Block ${targetBlock.name} is in the way at target position`, retryable: false },
+      };
+    }
+
+    // Find solid neighbor to place against (buildOffBlock)
     const dirs = [
       new Vec3(0, -1, 0), new Vec3(0, 1, 0),
       new Vec3(1, 0, 0), new Vec3(-1, 0, 0),
@@ -710,8 +683,7 @@ export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchem
     let buildOffBlock: ReturnType<typeof bot.blockAt> = null;
     let faceVec: import("vec3").Vec3 | null = null;
     for (const d of dirs) {
-      const neighborPos = targetPos.plus(d);
-      const block = bot.blockAt(neighborPos);
+      const block = bot.blockAt(targetPos.plus(d));
       if (block && !emptyNames.includes(block.name)) {
         buildOffBlock = block;
         faceVec = new Vec3(-d.x, -d.y, -d.z);
@@ -726,29 +698,38 @@ export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchem
       };
     }
 
+    ctx.progress({ current: 0, target: 1, unit: "placement", message: `Placing ${blockType} at ${x},${y},${z}` });
+
     try {
-      // If target position has a non-air block in the way, try to break it first
-      const targetBlock = bot.blockAt(targetPos);
-      if (targetBlock && !emptyNames.includes(targetBlock.name)) {
-        return {
-          ok: false,
-          status: "failed",
-          error: { code: "UNSAFE_BLOCK", message: `Block ${targetBlock.name} is in the way at target position`, retryable: false },
-        };
+      // Handle distance: too close → move away, too far → move closer
+      const pos = bot.entity.position;
+      const dontMoveFor = ["torch", "redstone_torch", "redstone", "lever", "button", "rail", "water_bucket", "string"];
+
+      if (!dontMoveFor.includes(itemName) && pos.distanceTo(targetPos) < 1.5) {
+        // Too close — move away
+        const goal = new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2);
+        const inverted = new goals.GoalInvert(goal);
+        bot.pathfinder.setMovements(new Movements(bot));
+        await bot.pathfinder.goto(inverted);
       }
 
+      if (bot.entity.position.distanceTo(targetPos) > 4.5) {
+        // Too far — move closer
+        bot.pathfinder.setMovements(new Movements(bot));
+        await bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 4));
+      }
+
+      // Equip, look, place
       await bot.equip(item, "hand");
       await bot.lookAt(buildOffBlock.position.offset(0.5, 0.5, 0.5));
       await bot.placeBlock(buildOffBlock, faceVec);
 
+      ctx.progress({ current: 1, target: 1, unit: "placement", message: `Placed ${blockType}` });
+
       return {
         ok: true,
         status: "success",
-        data: {
-          placed: true,
-          blockType,
-          position: { x: targetPos.x, y: targetPos.y, z: targetPos.z },
-        },
+        data: { placed: true, blockType, position: { x: targetPos.x, y: targetPos.y, z: targetPos.z } },
       };
     } catch (err: unknown) {
       if (checkCancelled(ctx)) {
