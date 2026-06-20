@@ -477,6 +477,7 @@ export function createUnstuckMode(): ModeDefinition {
         // Level 1: try jumping
         ctx.log("Stuck for 5s — jumping!");
         bot.setControlState("jump", true);
+        setTimeout(() => bot.setControlState("jump", false), 500);
         lastEscalation = 1;
       } else if (stuckTime > 10 && lastEscalation < 2) {
         // Level 2: pick a random direction and move
@@ -490,6 +491,10 @@ export function createUnstuckMode(): ModeDefinition {
         const pick = directions[Math.floor(Math.random() * directions.length)]!;
         bot.setControlState(pick[0], true);
         bot.setControlState(pick[1], true);
+        setTimeout(() => {
+          bot.setControlState(pick[0], false);
+          bot.setControlState(pick[1], false);
+        }, 1000);
         lastEscalation = 2;
       } else if (stuckTime > 15 && lastEscalation < 3) {
         // Level 3: try to break block at bot's position
