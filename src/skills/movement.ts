@@ -393,33 +393,43 @@ export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema
       "vex", "shulker",
     ]);
 
-    const findHostile = () =>
-      bot.nearestEntity(
-        (entity) => entity.name !== undefined && HOSTILE_NAMES.has(entity.name) &&
-          bot.entity.position.distanceTo(entity.position) < distance
-      );
-
     ctx.progress({ current: 0, target: 1, unit: "fleeing", message: "Avoiding enemies" });
 
-    let enemy = findHostile();
     let avoided = false;
-
-    while (enemy) {
+    const MAX_ITERATIONS = 20;
+    for (let i = 0; i < MAX_ITERATIONS; i++) {
       if (checkCancelled(ctx)) break;
 
-      // Move away from this enemy
-      const followGoal = new goals.GoalFollow(enemy, distance + 1);
-      const invertedGoal = new goals.GoalInvert(followGoal);
+      // Find ALL hostiles within range
+      const hostiles = Object.values(bot.entities).filter(
+        (e) => e.name !== undefined && HOSTILE_NAMES.has(e.name) &&
+          bot.entity.position.distanceTo(e.position) < distance
+      );
+
+      if (hostiles.length === 0) break;
+
+      // Calculate centroid of ALL hostiles
+      let avgX = 0, avgY = 0, avgZ = 0;
+      for (const h of hostiles) {
+        avgX += h.position.x;
+        avgY += h.position.y;
+        avgZ += h.position.z;
+      }
+      avgX /= hostiles.length;
+      avgY /= hostiles.length;
+      avgZ /= hostiles.length;
+
+      // Move away from centroid (away from all enemies)
+      const centroid = new Vec3(avgX, avgY, avgZ);
+      const avoidGoal = new goals.GoalNear(centroid.x, centroid.y, centroid.z, distance);
+      const invertedGoal = new goals.GoalInvert(avoidGoal);
       const movements = createMovements(bot);
       bot.pathfinder.setMovements(movements);
       bot.pathfinder.setGoal(invertedGoal, true);
 
       // Wait a bit for movement
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
       avoided = true;
-
-      // Check for next enemy
-      enemy = findHostile();
     }
 
     bot.pathfinder.stop();
