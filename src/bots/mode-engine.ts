@@ -505,43 +505,29 @@ export function createUnstuckMode(): ModeDefinition {
       const now = Date.now();
 
       if (ctx.isIdle) {
-        // Idle: check health drops AND position (15s threshold)
+        // Idle: only react to health drops (suffocation, drowning, etc.)
         const healthDiff = prevHealth - bot.health;
         prevHealth = bot.health;
 
         if (healthDiff > 0 && bot.health < 15) {
           ctx.log(`Taking damage while idle (health: ${bot.health}) — escaping!`);
+          // Try jump + random direction + dig
           bot.setControlState("jump", true);
           setTimeout(() => bot.setControlState("jump", false), 500);
           const dir = Math.random() > 0.5 ? "forward" : "back";
           bot.setControlState(dir, true);
           setTimeout(() => bot.setControlState(dir, false), 800);
+          // Also try dig nearby
+          const blockAtFeet = bot.blockAt(pos);
+          if (blockAtFeet && blockAtFeet.name !== "air" && blockAtFeet.name !== "bedrock") {
+            void bot.dig(blockAtFeet).catch(() => {});
+          }
         }
 
-        // Also track position (15s threshold for non-damage stuck like sand)
-        if (prevPosition) {
-          const dx = pos.x - prevPosition.x;
-          const dy = pos.y - prevPosition.y;
-          const dz = pos.z - prevPosition.z;
-          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-          if (dist < 0.5) {
-            stuckTime += (now - lastCheck) / 1000;
-          } else {
-            stuckTime = 0;
-            prevPosition = { x: pos.x, y: pos.y, z: pos.z };
-            lastEscalation = 0;
-          }
-        } else {
-          prevPosition = { x: pos.x, y: pos.y, z: pos.z };
-        }
+        prevPosition = null;
+        stuckTime = 0;
+        lastEscalation = 0;
         lastCheck = now;
-        if (stuckTime > 15) {
-          ctx.log("Stuck for 15s while idle — trying to get free!");
-          bot.setControlState("jump", true);
-          setTimeout(() => bot.setControlState("jump", false), 500);
-          stuckTime = 0;
-          prevPosition = null;
-        }
         return;
       }
 
