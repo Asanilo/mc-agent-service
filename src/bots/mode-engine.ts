@@ -713,8 +713,9 @@ export function createIdleStaringMode(): ModeDefinition {
       if (nearest) {
         const target = nearest.position.offset(0, (nearest as any).height ?? 1.6, 0);
         bot.lookAt(target, true).catch(() => {});
-      } else {
-        bot.look(0, 0, true).catch(() => {});
+      } else if (bot.entity) {
+        // Keep current yaw, reset pitch to horizontal
+        bot.look(bot.entity.yaw, 0, true).catch(() => {});
       }
     },
   };
