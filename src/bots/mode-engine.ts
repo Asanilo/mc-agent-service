@@ -372,12 +372,17 @@ export function createSelfPreservationMode(): ModeDefinition {
         ctx.log("Fled to safety");
       }
 
-      // Suffocating — block at feet is solid (sand/gravel/dirt)
-      if (block.name !== "air" && block.name !== "cave_air" && block.name !== "water" && block.name !== "lava") {
-        ctx.log(`Suffocating in ${block.name} — digging out!`);
+      // Suffocating — block at feet or above is solid (sand/gravel/dirt)
+      const buriedBlock = (block.name !== "air" && block.name !== "cave_air" && block.name !== "water" && block.name !== "lava")
+        ? block
+        : (blockAbove.name !== "air" && blockAbove.name !== "cave_air" && blockAbove.name !== "water" && blockAbove.name !== "lava")
+          ? blockAbove
+          : null;
+      if (buriedBlock) {
+        ctx.log(`Suffocating in ${buriedBlock.name} — digging out!`);
         bot.setControlState("jump", true);
         setTimeout(() => bot.setControlState("jump", false), 300);
-        void bot.dig(block).catch(() => {});
+        void bot.dig(buriedBlock).catch(() => {});
         lastActionTime = now;
       }
     },
