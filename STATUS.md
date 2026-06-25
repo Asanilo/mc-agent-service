@@ -49,22 +49,46 @@
 
 ### 🟡 剩余已知问题
 
-| # | 问题 | 状态 |
-|---|------|------|
-| 1 | 创造模式飞行 | 待做（pathfinder 不支持 `canFly`） |
-| 2 | NaN 坐标 bug | isFinite() check 已加，待完整测试 |
-| 3 | 弓/远程武器 | 未实现 |
-| 4 | consume 食物识别（腐肉） | 待完善 |
+| # | 问题 | 状态 | 说明 |
+|---|------|------|------|
+| 1 | 创造模式飞行 | 待做 | pathfinder 不支持 `canFly`，需双击跳跃进飞行态 |
+| 2 | NaN 坐标 bug | isFinite() check 已加 | Mineflayer 1.21.x 物理引擎 bug，bot 受伤→坐标 NaN→踢出 |
+| 3 | 弓/远程武器 | 未实现 | 自防御模式只用近战攻击 |
+| 4 | consume 食物识别 | 待完善 | 腐肉等食物未识别，需要完整食物表 |
+| 5 | `mine.dig_down` 效率 | 已修但慢 | 生存模式能挖，但等待 fall 的 delay 较长 |
+| 6 | `place_block` 自动空位 | 已修 | 周围都是石头时找不到空位（正常行为） |
+| 7 | `move.avoid_enemies` | 已修 | 质心算法已修复来回跑问题 |
 
-### ⏳ 后续路线
+### ⏳ Mindcraft 有但我们没有的能力（按优先级）
 
-| 阶段 | 内容 | 优先级 |
-|------|------|--------|
-| **Hermes plugin** | `ctx.register_tool` 封装 HTTP 调用 | 🔴 最高 |
-| **HERMES_INTEGRATION.md** | 集成文档 | 🔴 高 |
-| Phase 3 | 动作通道、ModeEngine 重做、重连、合约测试 | 🟡 中 |
-| Phase 4 | MCP 对齐、OpenAPI、Auth 加固 | 🟡 中 |
-| Phase 5 | 行为循环、多 bot、视觉、游戏扩展 | 🟢 低 |
+| # | 能力 | 工作量 | 说明 |
+|---|------|--------|------|
+| 1 | `place_block` 至自动放置 | 小 | 现在已支持手动坐标 + 自动空位 |
+| 2 | `activateNearestBlock` | 中 | 按按钮、拉杆、用工作台 |
+| 3 | `consume` | 小 | 已实现但食物表不全 |
+| 4 | `craftingPlan` | 中 | 查合成需要什么材料 |
+| 5 | 搜索方块/实体 | 中 | Mindcraft 有大范围搜索 |
+| 6 | 记住位置 | 小 | 标记家/矿洞入口并返回 |
+| 7 | 村民交易 | 大 | 不优先 |
+| 8 | 翻地播种 | 中 | 不优先 |
+| 9 | 蓝图建造 | 大 | 不优先 |
+| 10 | 聊天/对话 | 中 | 不优先（多 bot 交互） |
+| 11 | 弓/远程 | 中 | 自防御模式扩展 |
+
+### ⏳ 架构层面待做
+
+| # | 项目 | 工作量 | 说明 |
+|---|------|--------|------|
+| 1 | **Hermes plugin** | 小 | `ctx.register_tool` 封装 HTTP 调用，让 Hermes 感知不到服务层 |
+| 2 | **HERMES_INTEGRATION.md** | 小 | 设计文档，说明 turn-based agent 怎么集成 |
+| 3 | **动作通道（Action Lanes）** | 大 | 观察/写入/系统三通道，互不阻塞 |
+| 4 | **ModeEngine 重做** | 大 | 模式不只能 interrupt，能执行技能并恢复 |
+| 5 | **重连架构** | 中 | BotManager vs MineflayerAdapter 职责分清 |
+| 6 | **持久化** | 大 | JSONL 事件日志、Job 历史、WS replay |
+| 7 | **合约测试** | 中 | REST schema、MCP tools、WebSocket 格式 |
+| 8 | **MCP 对齐** | 中 | API.md 工具名与实现统一 |
+| 9 | **OpenAPI 输出** | 小 | 从 skill registry 自动生成 |
+| 10 | **Auth 加固** | 中 | MCP HTTP auth、config 脱敏、请求 ID |
 
 ## 架构要点
 
