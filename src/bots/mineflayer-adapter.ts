@@ -232,6 +232,20 @@ export class MineflayerAdapter extends EventEmitter {
       }
       return originalEmit(event, ...args);
     };
+
+    // Prevent server position_look from overriding our pitch (run BEFORE Mineflayer's handler)
+    bot._client.prependListener("position_look", (data: { yaw: number; pitch: number; x: number; y: number; z: number }) => {
+      if (bot.entity && Math.abs(data.pitch) > 0.5) {
+        data.pitch = 0; // keep horizontal
+      }
+    });
+
+    // Fallback: immediate pitch correction on any position update
+    bot.on("move", () => {
+      if (bot.entity && Math.abs(bot.entity.pitch) > 0.5) {
+        bot.entity.pitch = 0;
+      }
+    });
   }
 
   // ── Event binding ───────────────────────────────────────────────────────
