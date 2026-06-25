@@ -703,7 +703,8 @@ export function createIdleStaringMode(): ModeDefinition {
         if (e.type !== "player") continue;
         if (e.name === bot.username) continue;
         const d = pos.distanceTo(e.position);
-        if (d < 10 && d < nearestDist) {
+        if (d < 1 || d > 10) continue; // skip self (<1 block) and too far
+        if (d < nearestDist) {
           nearest = e;
           nearestDist = d;
         }
@@ -713,7 +714,6 @@ export function createIdleStaringMode(): ModeDefinition {
         const target = nearest.position.offset(0, (nearest as any).height ?? 1.6, 0);
         bot.lookAt(target, true).catch(() => {});
       } else {
-        // No player nearby — look forward (pitch = 0, horizontal)
         bot.look(0, 0, true).catch(() => {});
       }
     },
