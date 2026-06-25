@@ -102,7 +102,7 @@ export class ModeEngine {
 
   // ── Start the mode update loop ──────────────────────────────────────────
 
-  start(intervalMs = 500): void {
+  start(intervalMs = 200): void {
     if (this.updateInterval) return;
     this.updateInterval = setInterval(() => {
       void this.tick();
@@ -252,6 +252,11 @@ export class ModeEngine {
 
     const isIdle = this.isIdleFn?.() ?? true;
     const currentSkill = this.currentSkillFn?.() ?? null;
+
+    // Force pitch to horizontal when idle (counters server position sync resets)
+    if (isIdle && this.bot.entity && Math.abs(this.bot.entity.pitch) > 0.5) {
+      this.bot.look(this.bot.entity.yaw, 0, true).catch(() => {});
+    }
 
     // Sort by priority (highest first)
     const sorted = Array.from(this.modes.entries()).sort(
