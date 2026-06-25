@@ -2,6 +2,8 @@ import type { Bot } from "mineflayer";
 import type { IndexedData } from "minecraft-data";
 import type { ModeStatus } from "../types/bot.js";
 import type { Entity } from "prismarine-entity";
+import pf from "mineflayer-pathfinder";
+const { Movements, goals } = pf;
 
 // ─── Mode Definition ────────────────────────────────────────────────────────
 
@@ -515,7 +517,12 @@ export function createSelfDefenseMode(): ModeDefinition {
           cx += h.position.x; cy += h.position.y; cz += h.position.z;
         }
         cx /= allHostiles.length; cy /= allHostiles.length; cz /= allHostiles.length;
-        ctx.requestAction("move.away", { x: cx, y: cy, z: cz, distance: 15 });
+        // Directly pathfind away from centroid
+        const awayGoal = new goals.GoalNear(cx, cy, cz, 15);
+        const invertedGoal = new goals.GoalInvert(awayGoal);
+        const movements = new Movements(bot);
+        bot.pathfinder.setMovements(movements);
+        bot.pathfinder.setGoal(invertedGoal, true);
         return;
       }
 
