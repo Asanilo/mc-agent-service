@@ -620,14 +620,14 @@ export const inventoryGiveToPlayer: SkillDefinition<z.infer<typeof GiveToPlayerS
 
 const PlaceBlockSchema = z.object({
   blockType: z.string().min(1),
-  x: z.number().int(),
-  y: z.number().int(),
-  z: z.number().int(),
+  x: z.number().int().optional(),
+  y: z.number().int().optional(),
+  z: z.number().int().optional(),
 }).strict();
 
 export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchema>> = {
   name: "inventory.place_block",
-  description: "Place a block at the specified coordinates. Requires exact x/y/z.",
+  description: "Place a block at specified coordinates, or auto-find nearest free space.",
   category: "inventory",
   permissions: ["movement", "inventory", "block.place"],
   timeoutMs: 30000,
@@ -637,7 +637,69 @@ export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchem
   async run(ctx, params) {
     const bot = ctx.bot;
     const { blockType, x, y, z } = params;
-    const targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+
+    // Ensure bot is spawned
+    if (!bot.entity) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "BOT_NOT_SPAWNED", message: "Bot has not spawned yet", retryable: true },
+      };
+    }
+    const botPos = bot.entity.position;
+    if (!botPos) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "NO_POSITION", message: "Bot has no position yet", retryable: true },
+      };
+    }
+
+    // Determine target position
+    let targetPos: import("vec3").Vec3;
+    if (x !== undefined && y !== undefined && z !== undefined) {
+      targetPos = new Vec3(Math.floor(x), Math.floor(y), Math.floor(z));
+    } else {
+      // Auto-find nearest free space (exclude bot position)
+      const airBlocks = bot.findBlocks({
+        matching: (block) => {
+          if (!botPos) return false;
+          if (!block || !block.position) return false;
+          if (block.name !== "air" && block.name !== "cave_air") return false;
+          if (Math.floor(block.position.x) === Math.floor(botPos.x) &&
+              Math.floor(block.position.y) === Math.floor(botPos.y) &&
+              Math.floor(block.position.z) === Math.floor(botPos.z)) return false;
+          return true;
+        },
+        maxDistance: 16,
+        count: 27,
+      });
+      const emptyNames = ["air", "cave_air", "water", "lava", "grass", "short_grass", "tall_grass", "snow", "dead_bush", "fern"];
+      let found: import("vec3").Vec3 | null = null;
+      for (const pos of airBlocks) {
+        const neighbors = [
+          pos.offset(0, -1, 0), pos.offset(0, 1, 0),
+          pos.offset(1, 0, 0), pos.offset(-1, 0, 0),
+          pos.offset(0, 0, 1), pos.offset(0, 0, -1),
+        ];
+        for (const n of neighbors) {
+          const nBlock = bot.blockAt(n);
+          if (nBlock && !emptyNames.includes(nBlock.name)) {
+            found = pos;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      if (!found) {
+        return {
+          ok: false,
+          status: "failed",
+          error: { code: "TARGET_NOT_FOUND", message: "No free space found nearby", retryable: true },
+        };
+      }
+      targetPos = found;
+    }
 
     // Resolve item name
     let itemName = blockType;
@@ -701,6 +763,11 @@ export const inventoryPlaceBlock: SkillDefinition<z.infer<typeof PlaceBlockSchem
     ctx.progress({ current: 0, target: 1, unit: "placement", message: `Placing ${blockType} at ${x},${y},${z}` });
 
     try {
+      // Check bot is still spawned
+      if (!bot.entity || !bot.entity.position) {
+        return { ok: false, status: "failed", error: { code: "BOT_DESPAWNED", message: "Bot despawned during placement", retryable: true } };
+      }
+
       // Handle distance: too close → move away, too far → move closer
       const pos = bot.entity.position;
       const dontMoveFor = ["torch", "redstone_torch", "redstone", "lever", "button", "rail", "water_bucket", "string"];
