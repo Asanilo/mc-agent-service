@@ -681,8 +681,6 @@ function isHostile(entity: { type?: string; name?: string }): boolean {
 // ─── Idle Staring Mode ─────────────────────────────────────────────────────
 
 export function createIdleStaringMode(): ModeDefinition {
-  let lastLookTime = 0;
-
   return {
     name: "idle_staring",
     description: "Look at nearby players when idle.",
@@ -694,24 +692,29 @@ export function createIdleStaringMode(): ModeDefinition {
     update: (ctx) => {
       if (!ctx.isIdle) return;
 
-      const now = Date.now();
-      if (now - lastLookTime < 3000) return;
-
       const bot = ctx.bot;
       const pos = bot.entity.position;
 
-      const entity = Object.values(bot.entities).find((e) => {
-        if (!e?.position || !e.name) return false;
-        if (e.type !== "player") return false;
-        if (e.name === bot.username) return false;
-        return pos.distanceTo(e.position) < 10;
-      });
+      let nearest: any = null;
+      let nearestDist = Infinity;
 
-      if (entity) {
-        // Force instant look at player's head level
-        const target = entity.position.offset(0, (entity as any).height ?? 1.6, 0);
+      for (const e of Object.values(bot.entities)) {
+        if (!e?.position || !e.name) continue;
+        if (e.type !== "player") continue;
+        if (e.name === bot.username) continue;
+        const d = pos.distanceTo(e.position);
+        if (d < 10 && d < nearestDist) {
+          nearest = e;
+          nearestDist = d;
+        }
+      }
+
+      if (nearest) {
+        const target = nearest.position.offset(0, (nearest as any).height ?? 1.6, 0);
         bot.lookAt(target, true).catch(() => {});
-        lastLookTime = now;
+      } else {
+        // No player nearby — look forward (pitch = 0, horizontal)
+        bot.look(0, 0, true).catch(() => {});
       }
     },
   };
