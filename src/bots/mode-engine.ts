@@ -371,6 +371,15 @@ export function createSelfPreservationMode(): ModeDefinition {
         ctx.requestAction("move.away", { x: pos.x, y: pos.y, z: pos.z, distance: 10 });
         ctx.log("Fled to safety");
       }
+
+      // Suffocating — block at feet is solid (sand/gravel/dirt)
+      if (block.name !== "air" && block.name !== "cave_air" && block.name !== "water" && block.name !== "lava") {
+        ctx.log(`Suffocating in ${block.name} — digging out!`);
+        bot.setControlState("jump", true);
+        setTimeout(() => bot.setControlState("jump", false), 300);
+        void bot.dig(block).catch(() => {});
+        lastActionTime = now;
+      }
     },
   };
 }
