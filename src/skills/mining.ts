@@ -324,8 +324,15 @@ export const mineDigDown: SkillDefinition<z.infer<typeof DigDownSchema>> = {
       }
     }
 
+    if (dug === 0) {
+      return {
+        ok: false,
+        status: "failed",
+        error: { code: "SKILL_FAILED", message: stoppedReason ?? "Could not dig any blocks", retryable: true },
+      };
+    }
     return {
-      ok: dug > 0,
+      ok: true,
       status: "success",
       data: { dug, requested: distance, stoppedReason },
       message: stoppedReason ? `Dug ${dug} blocks, stopped: ${stoppedReason}` : `Dug ${dug} blocks downward`,
