@@ -685,7 +685,9 @@ export function createIdleStaringMode(): ModeDefinition {
 
       const entity = Object.values(bot.entities).find((e) => {
         if (!e?.position || !e.name) return false;
-        return pos.distanceTo(e.position) < 10 && e.name !== bot.username;
+        if (e.type !== "player") return false;
+        if (e.name === bot.username) return false;
+        return pos.distanceTo(e.position) < 10;
       });
 
       if (entity) {
