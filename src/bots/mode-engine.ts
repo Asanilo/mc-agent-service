@@ -479,43 +479,60 @@ export function createSelfDefenseMode(): ModeDefinition {
         return;
       }
 
-      // Find nearest alive hostile mob within 5 blocks
-      let nearestHostile: any = null;
-      let nearestDist = Infinity;
+      // Find all hostiles nearby
+      const allHostiles = Object.values(bot.entities).filter((e) => {
+        if (!e?.position || !e.name) return false;
+        if (e === bot.entity) return false;
+        if (!isHostile(e)) return false;
+        // Check if alive
+        const health = (e as any).health;
+        if (health !== undefined && health <= 0) return false;
+        return pos.distanceTo(e.position) < 15;
+      });
 
-      for (const entity of Object.values(bot.entities)) {
-        if (!entity?.position || !entity.name) continue;
-        if (entity === bot.entity) continue;
-        const dist = pos.distanceTo(entity.position);
-        if (dist > 5 || dist >= nearestDist) continue;
-        if (!isHostile(entity)) continue;
-        // Check if entity is alive (health > 0 or no health data)
-        const health = (entity as any).health;
-        if (health !== undefined && health <= 0) continue;
-        nearestHostile = entity;
-        nearestDist = dist;
+      if (allHostiles.length === 0) return;
+
+      // Nearest hostile
+      const nearestHostile = allHostiles.reduce((closest, e) => {
+        const d1 = pos.distanceTo(e.position);
+        const d2 = pos.distanceTo(closest.position);
+        return d1 < d2 ? e : closest;
+      });
+
+      const nearestDist = pos.distanceTo(nearestHostile.position);
+
+      if (nearestDist > 3) {
+        // Distant mob — flee from centroid
+        ctx.log(`Hostile ${nearestHostile.name} ${nearestDist.toFixed(1)} blocks away — fleeing!`);
+        ctx.interruptCurrentAction();
+        let cx = 0, cy = 0, cz = 0;
+        for (const h of allHostiles) {
+          cx += h.position.x; cy += h.position.y; cz += h.position.z;
+        }
+        cx /= allHostiles.length; cy /= allHostiles.length; cz /= allHostiles.length;
+        ctx.requestAction("move.away", { x: cx, y: cy, z: cz, distance: 15 });
+        return;
       }
 
-      if (nearestHostile) {
-        ctx.log(`Hostile ${nearestHostile.name} nearby — attacking!`);
-        ctx.interruptCurrentAction();
+      // Very close mob (≤3 blocks) — fight
+      ctx.log(`Hostile ${nearestHostile.name} ${nearestDist.toFixed(1)} blocks away — attacking!`);
+      ctx.interruptCurrentAction();
 
-        // Equip best weapon before attacking
-        equipBestWeapon(bot);
+      // Equip best weapon before attacking
+      equipBestWeapon(bot);
 
-        // Attack with cooldown (0.6s between hits)
-        if (now - lastAttackTime > 600) {
-          try {
-            bot.attack(nearestHostile);
-            lastAttackTime = now;
-            // Check if entity was defeated
-            if (!bot.entities[nearestHostile.id]) {
-              defeatedCount++;
-              ctx.log(`Defeated hostile #${defeatedCount}: ${nearestHostile.name}`);
-            }
-          } catch {
-            // Entity may have despawned mid-attack
+      // Attack with cooldown (0.6s between hits)
+      if (now - lastAttackTime > 600) {
+        try {
+          bot.attack(nearestHostile);
+          lastAttackTime = now;
+          // Check if entity was defeated
+          if (!bot.entities[nearestHostile.id]) {
+            defeatedCount++;
+            ctx.log(`Defeated hostile #${defeatedCount}: ${nearestHostile.name}`);
           }
+        } catch {
+          // Entity may have despawned mid-attack
         }
       }
     },
@@ -668,7 +685,7 @@ export function createIdleStaringMode(): ModeDefinition {
 
   return {
     name: "idle_staring",
-    description: "Look at nearby entities when idle.",
+    description: "Look at nearby players when idle.",
     priority: 10,
     enabled: true,
     permissions: [],
@@ -678,7 +695,7 @@ export function createIdleStaringMode(): ModeDefinition {
       if (!ctx.isIdle) return;
 
       const now = Date.now();
-      if (now - lastLookTime < 5000 + Math.random() * 5000) return;
+      if (now - lastLookTime < 3000) return;
 
       const bot = ctx.bot;
       const pos = bot.entity.position;
@@ -691,8 +708,9 @@ export function createIdleStaringMode(): ModeDefinition {
       });
 
       if (entity) {
+        // Force instant look at player's head level
         const target = entity.position.offset(0, (entity as any).height ?? 1.6, 0);
-        bot.lookAt(target).catch(() => {});
+        bot.lookAt(target, true).catch(() => {});
         lastLookTime = now;
       }
     },
