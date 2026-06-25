@@ -380,9 +380,40 @@ export function createSelfPreservationMode(): ModeDefinition {
           : null;
       if (buriedBlock) {
         ctx.log(`Suffocating in ${buriedBlock.name} — digging out!`);
+        // Equip best tool for the block type
+        const toolForBlock: Record<string, string> = {
+          stone: "pickaxe", deepslate: "pickaxe", cobblestone: "pickaxe",
+          iron_ore: "pickaxe", coal_ore: "pickaxe", diamond_ore: "pickaxe",
+          dirt: "shovel", sand: "shovel", gravel: "shovel", grass_block: "shovel",
+          oak_log: "axe", spruce_log: "axe", birch_log: "axe",
+          oak_planks: "axe", spruce_planks: "axe",
+        };
+        const wantedTool = toolForBlock[buriedBlock.name] || "pickaxe";
+        // Find best tool of that type in inventory
+        const items = bot.inventory.items().length > 0 ? bot.inventory.items() : bot.inventory.slots.filter((s): s is NonNullable<typeof bot.inventory.slots[number]> => s !== null);
+        let bestTool: any = null;
+        let bestLevel = 0;
+        const toolLevels: Record<string, number> = {
+          wooden_pickaxe: 1, stone_pickaxe: 2, iron_pickaxe: 3, diamond_pickaxe: 4, netherite_pickaxe: 5,
+          wooden_shovel: 1, stone_shovel: 2, iron_shovel: 3, diamond_shovel: 4, netherite_shovel: 5,
+          wooden_axe: 1, stone_axe: 2, iron_axe: 3, diamond_axe: 4, netherite_axe: 5,
+        };
+        for (const item of items) {
+          if (item.name.includes(wantedTool)) {
+            const lvl = toolLevels[item.name] ?? 0;
+            if (lvl > bestLevel) { bestLevel = lvl; bestTool = item; }
+          }
+        }
+        if (bestTool) {
+          bot.equip(bestTool, "hand").catch(() => {});
+          setTimeout(() => {
+            void bot.dig(buriedBlock).catch(() => {});
+          }, 200);
+        } else {
+          void bot.dig(buriedBlock).catch(() => {});
+        }
         bot.setControlState("jump", true);
         setTimeout(() => bot.setControlState("jump", false), 300);
-        void bot.dig(buriedBlock).catch(() => {});
         lastActionTime = now;
       }
     },
