@@ -1,10 +1,39 @@
 # mc-agent-service 状态文档
 
-> 最后更新: 2026-07-01
+> 最后更新: 2026-07-02
 
 ## 项目概况
 
 35 个 TypeScript 文件，~12,000 行代码。Standalone Node.js 服务，给外部 AI 提供 Minecraft"身体"。
+
+## 当前真相来源
+
+- 当前实现状态：本文档。
+- 当前路线图：`docs/ROADMAP_v2.md`。
+- 当前契约：`docs/SPEC.md`、`docs/API.md`、`docs/SKILLS.md`、`docs/ARCHITECTURE.md`。
+- 历史参考：`docs/archive/*`，不作为当前任务来源。
+
+## P0 Active Checklist
+
+| ID | 项目 | 状态 | 说明 |
+|---|------|------|------|
+| P0 #1 | `distance` / `minDistance` 统一 | active | `move.*` skills 与 MCP wrapper 统一使用 `distance`；必要时保留兼容 alias。 |
+| P0 #3 | 长运行 skill 取消语义 | active | `move.follow_player`、`move.stay`、`move.avoid_enemies` 等 abort 时必须返回 `ok:false,status:"cancelled"`。 |
+| P0 #4 | Worker crash job ownership | active | `BotManager` 不再伪造 failed job；只发 `worker_dead`，由 `JobManager` 统一处理终态。 |
+| P0 #5 | 安全默认值 | active | 默认 `127.0.0.1`；`0.0.0.0 + auth:none` 需 `MCAGENT_ALLOW_INSECURE=1`。 |
+| P0 #2 | Action Lanes | post-P0 | primary / observation / safety / system 仲裁层，P0 #1/#3/#4/#5 后做。 |
+
+## Memory provider 计划
+
+Memory provider 采用三层枚举思路：
+
+| Provider | 含义 | 状态 |
+|---|---|---|
+| `none` | 不持久化、不外发记忆事件 | v0.x 默认 |
+| `built_in` | 服务内置持久化后端，如 file / sqlite | Phase 7 |
+| `external` | 外部记忆服务，如 Hermes HTTP adapter 或其他 agent memory service | Phase 7 |
+
+原则：memory provider 不参与动作执行，不阻塞 primary lane，不因为记忆失败影响 bot 生存或 job 状态。
 
 ## 完成状态
 
@@ -90,6 +119,7 @@
 | 9 | **OpenAPI 输出** | 小 | 从 skill registry 自动生成 |
 | 10 | **Auth 加固** | 中 | MCP HTTP auth、config 脱敏、请求 ID |
 | 11 | **文档对齐** | 小 | 2026-07-01 已对齐 API.md/SKILLS.md/SPEC.md/ARCHITECTURE.md 与代码，详见下方 |
+| 12 | **Normal Player Mode 文档** | 已加 | 见 `docs/NORMAL_PLAYER_MODE.md`，定义无 OP、无作弊、玩家可见信息边界 |
 
 ### 📋 文档-代码对齐记录 (2026-07-01)
 
@@ -154,21 +184,7 @@ Detail in `docs/ROADMAP_v2.md`. SPEC §13 is the index.
 | 4 Mod-aware action | **next** | Create-aware craft/interact skills |
 | 5 Modpack knowledge indexer | **next** | Offline scan → `knowledge.sqlite` |
 | 6 Create early-game helper | **next** | Compositional skills over 3–5 |
-| 7 Memory providers | **reserved** | Spec §7.3 contract; only `none` ships |
+| 7 Memory providers | **reserved** | Provider kinds: `none` / `built_in` / `external` |
 | 8 AgentProbe Mod | **external** | Separate NeoForge repo |
 | 9 Multi-brain / multi-bot | **deferred** | Multi-brain already works; multi-bot coordination not |
 | 10 Touhou Little Maid | **deferred** | Body-vs-entity split |
-
-## GPT Review P0 Status
-
-Source: `docs/GPT0701review.md` (2026-07-01 health check). Detailed P0 reasoning lives there.
-
-| # | P0 项 | 状态 | 备注 |
-|---|---|---|---|
-| 1 | MCP/Skill schema 漂移 | 待做 | 决策：**统一成 `distance` 字段**（覆盖 `move.to_position` 的 `minDistance`）。代码改动交给外部 agent。 |
-| 2 | Action lanes 实装 | 暂缓 | SPEC §9 / ARCHITECTURE §9 已设计接口（primary / observation / safety / system），代码未落地。Phase 4 TODO。 |
-| 3 | 长循环 skill cancel 语义 | 待做 | `move.follow_player` / `move.stay` / `move.avoid_enemies` 取消时返回 `success` 是错的，应返回 `{ ok: false, status: "cancelled" }`。代码改动交给外部 agent。 |
-| 4 | BotManager 捏造 failedJob | 待做 | `bot-manager.ts:354-383` 直接构造 fake Job 并 call `jobEventHandler`，违反 SPEC §3 "JobManager 是 job 生命周期 owner"。代码改动交给外部 agent。 |
-| 5 | 启动安全默认 | 待做 | `mc-agent-service.json` 默认 `0.0.0.0` + 无 auth；要求默认 `127.0.0.1`，显式 opt-in 0.0.0.0（`MCAGENT_ALLOW_INSECURE=1`）。代码改动交给外部 agent。 |
-
-P1 follow-ups (待办, 不在 P0 范围): `README.md` quickstart；prettier/eslint；Mineflayer 4.23→4.37 矩阵测试；events.jsonl replay。
