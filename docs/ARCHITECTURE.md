@@ -587,10 +587,10 @@ error:
   connection.error
 ```
 
-Event persistence:
+Event persistence: **(not yet implemented — stubs only)**
 
 - Persistence is optional and controlled by storage config.
-- The initial provider may write JSONL event records under the configured data directory.
+- The planned initial provider writes JSONL event records under the configured data directory.
 - Persisted events include ID, timestamp, type, bot ID, job ID, and JSON-serializable data.
 - Event logs are for debugging, replay, and postmortems; they are not the primary source of live bot truth.
 
@@ -603,7 +603,7 @@ Event filtering:
 
 ## 6. Extension Points
 
-Custom skills:
+Custom skills: **(manifest type exists, plugin loader not yet implemented)**
 
 - Plugins provide a `skill-manifest.json` and compiled JavaScript entrypoint.
 - Manifests declare skill names, descriptions, categories, permissions, timeout defaults, busy policies, and JSON Schemas.
@@ -612,7 +612,7 @@ Custom skills:
 - Skill handlers run inside the owning bot worker through a constrained `SkillExecutionContext`.
 - Plugin skills are exposed through REST, WebSocket job events, and MCP like built-ins.
 
-Custom memory providers:
+Custom memory providers: **(not yet implemented — `none` is the only available provider)**
 
 - Memory is optional, with `none` as the default provider.
 - Providers implement `init`, `store`, `retrieve`, `search`, and `clear`.
@@ -665,12 +665,12 @@ Worker sandboxing:
 - Plugin skill loading should be constrained by manifest validation, explicit permission declarations, and deployment policy.
 - For stricter deployments, plugin execution can be limited to vetted plugin directories, disabled entirely, or moved to a stronger sandbox.
 
-Rate limiting:
+Rate limiting: **(only chat rate limit middleware is wired)**
 
 - REST, WebSocket, and MCP adapters apply rate limits independently.
 - Chat sends have a dedicated rate limit to avoid server kicks.
 - Progress and state events are rate-limited or coalesced before WebSocket fanout.
-- Reconnect attempts use exponential backoff with jitter to avoid tight reconnect loops.
+- Reconnect attempts use exponential backoff with jitter to avoid tight reconnect loops. **(not yet implemented — current reconnect uses fixed 1s delay)**
 
 ## 8. Error Handling Strategy
 

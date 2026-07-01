@@ -9,13 +9,15 @@ mc-agent-service is a standalone TypeScript/Node.js service that gives external 
 The core goals are:
 
 - Run as an independent process with no dependency on a specific LLM runtime.
+- Be **brain-agnostic**: any upstream agent (Hermes, Codex, Claude Code, a local model, future agent) can drive the service through the same MCP/REST/WebSocket surface. Swapping the brain does not require changing the service.
 - Provide a clean, validated API surface for bot creation, state inspection, chat, and skill execution.
-- Support multiple Minecraft bots in one service instance.
+- Support multiple Minecraft bots in one service instance (multi-bot coordination itself is deferred; see §13).
 - Isolate each bot enough that a stuck pathfinder, server disconnect, inventory operation, or plugin error does not corrupt the control plane.
 - Represent work as jobs with lifecycle state, progress, cancellation, timeouts, and retry metadata.
 - Provide a skill system that maps structured inputs to Mineflayer operations rather than interpreting natural language.
-- Keep memory, planning, vision, and viewer features optional and replaceable.
-- Make Minecraft version, auth, server connection, memory provider, and mode policy configurable per bot.
+- **Play modpacks**: cover mod-aware observation (recipes, quests, guides, mod internals) and mod-aware actions enough for an AI to enjoy a modpack like Mechanomania as a real player, not a vanilla bot. See §13 Roadmap Phase 5–6.
+- Surface bot state, observations, and events cleanly to external agents. Long-term memory persistence is reserved (see §7); the service exposes the hook surface but does not ship a built-in memory store today.
+- Make Minecraft version, auth, server connection, and mode policy configurable per bot.
 - Emit events suitable for external agents to maintain situational awareness.
 - Persist enough config, event history, and job history to debug bot behavior and survive process restarts when configured.
 
@@ -32,7 +34,7 @@ The service core must not become an LLM application. Specifically:
 - No direct dependency on Hermes, Codex, Claude Code, or any single agent framework is required.
 - No guarantee is made that a bot can complete high-level goals such as "build a house" without an external planner or explicit sequence of skills.
 
-Optional modules may call LLMs or memory systems, but those modules must be disabled by default and must communicate through explicit interfaces.
+Optional modules such as vision or viewer may be added later, but must be disabled by default and must communicate through explicit interfaces.
 
 ## 2. Architecture Overview
 
@@ -294,7 +296,7 @@ Modes must declare:
 - Enabled default.
 - Priority.
 - Required permissions.
-- Whether it may move, dig, place, attack, open containers, or consume items.
+- Whether it uses movement, block placement/breaking, combat, inventory, or container operations.
 - Which primary skills can pause it.
 
 ModeEngine must support `pause(name)`, `unpause(name)`, `pauseMany(names)`, and scoped pause handles that automatically restore previous state after a skill finishes.
@@ -328,7 +330,7 @@ Stored data:
 - Service config file and per-bot config.
 - Event log.
 - Job history.
-- Optional memory provider data.
+- Optional memory hook targets (see §7).
 
 Initial implementation may use JSONL files under a configured data directory. The storage interface must allow future SQLite or Postgres implementations without changing API handlers.
 
@@ -437,9 +439,10 @@ Required MCP tools:
 - `stop_bot`
 - `send_chat`
 - `get_state`
-- `move_to`
-- `collect_blocks`
-- `craft_item`
+- `move.to_position`
+- `move.follow_player`
+- `mine.collect_blocks`
+- `craft.item`
 - `cancel_job`
 
 MCP tool behavior:
@@ -468,18 +471,14 @@ Each skill has:
 
 ```ts
 type SkillPermission =
-  | "move"
-  | "dig"
-  | "place"
-  | "attack"
+  | "movement"
   | "inventory"
-  | "craft"
-  | "smelt"
-  | "container"
+  | "block.place"
+  | "block.break"
+  | "combat"
   | "chat"
-  | "observe"
-  | "consume"
-  | "trade";
+  | "container"
+  | "entity.interact";
 
 interface SkillDefinition<TParams> {
   name: string;
@@ -744,107 +743,82 @@ interface RetryPolicy {
 
 Retries are allowed only for errors marked retryable and only when the skill declares idempotent or retry-safe behavior. Examples of retryable errors include transient pathfinder failures, temporary server lag, and missing chunk data. Examples of non-retryable errors include invalid item names, missing tools, permission denial, and fatal auth failures.
 
-## 7. Memory System (Optional)
+## 7. Memory Provider (Reserved Interface)
 
-Memory is optional. The default provider is `none`, which performs no storage.
+Long-term memory persistence is **not** shipped by the service today. The interface is reserved so that built-in or external stores can be plugged in later without changing the contract.
 
-### Provider Interface
+External memory is the responsibility of the upstream agent (e.g. Hermes), which is itself an agent with built-in memory. The service guarantees a clean observation/event surface (§7.1) and a pluggable provider model (§7.2) for deployments that want the service itself to forward events to a store.
+
+### 7.1 Observation Surface (always available)
+
+The service surfaces bot state regardless of which memory provider is configured:
+
+- **Observation skills** (`observe.state`, `observe.inventory`, `observe.nearby`, `observe.block_at`, etc.) as structured read endpoints.
+- **EventBus events** (`job.*`, `chat.*`, `world.*`, `safety.*`) as a JSON-serializable stream.
+- **Bot state snapshots** via `GET /bots/{id}/state` and `minecraft://bots/{id}/state`.
+
+### 7.2 Provider Model
+
+A MemoryProvider forwards `MemoryHookEvent`s to a backing store. Three provider kinds are recognized:
+
+| Kind | Meaning | Status |
+|---|---|---|
+| `none` | No forwarding. The service retains no memory. | **default**; no provider object required |
+| `built-in` | A first-party provider ships with the service (e.g. file JSONL). | **reserved**; not implemented in this revision. See §13 Roadmap Phase 7. |
+| `external` | The service forwards events to an HTTP endpoint configured by the operator (e.g. an upstream agent's `/scope_recall`). | **reserved**; enabled by providing `memory.kind="external"` plus an `http` config. |
+
+### 7.3 Provider Interface (reserved)
 
 ```ts
+type MemoryProviderKind = "none" | "built-in" | "external";
+
+interface MemoryProviderConfig {
+  kind: MemoryProviderKind;
+  // Built-in providers (future) take their own settings here.
+  builtIn?: {
+    /** reserved: name of the built-in provider, e.g. "file" */
+    name?: string;
+    /** reserved: settings passed to the built-in provider */
+    settings?: Record<string, unknown>;
+  };
+  external?: {
+    /** target URL of the external memory service */
+    url: string;
+    /** optional header / token env var name */
+    authHeaderEnv?: string;
+    /** per-call timeout ms */
+    timeoutMs?: number;
+  };
+}
+
+interface MemoryHookEvent {
+  botId: string;
+  source: "observation" | "job" | "chat" | "world";
+  type: string;       // e.g. "observe.state", "job.completed"
+  data: unknown;
+  ts: string;
+}
+
 interface MemoryProvider {
   init(config: MemoryProviderConfig): Promise<void>;
-  store(record: MemoryRecord): Promise<void>;
-  retrieve(key: string): Promise<MemoryRecord | null>;
-  search(query: MemorySearchQuery): Promise<MemorySearchResult[]>;
-  clear(scope?: MemoryScope): Promise<void>;
-}
-
-interface MemoryRecord {
-  key: string;
-  botId: string;
-  scope?: string;
-  type: "event" | "observation" | "job" | "note";
-  text?: string;
-  data?: unknown;
-  tags?: string[];
-  createdAt: string;
-}
-
-interface MemorySearchQuery {
-  botId: string;
-  text?: string;
-  tags?: string[];
-  limit?: number;
-  since?: string;
+  store(event: MemoryHookEvent): Promise<void>;
+  shutdown(): Promise<void>;
 }
 ```
 
-### Implementations
+### 7.4 Rules
 
-#### `none`
+- The provider interface is **stable**; new built-in providers (file, sqlite, hermes-proxy, …) can be added without changing it.
+- The service ships only `none` today. `built-in` and `external` are reserved: the config schema accepts the keys, but no provider object is implemented. Operators who set `kind: "external"` or `kind: "built-in"` get a startup-time warning in this revision.
+- All provider calls are **best-effort**: failures are logged but never crash the bot worker or block the primary lane.
+- Bots remain operable when no provider is configured or when the target is unreachable.
+- Memory providers do not bypass the action lanes — they are off the critical path.
 
-No-op provider. All methods succeed without storing data. `retrieve` returns `null`; `search` returns `[]`.
+### 7.5 Roadmap
 
-#### `file`
-
-Stores JSONL records in the configured data directory. It is suitable for development and small deployments.
-
-Required behavior:
-
-- One file per bot or one partitioned JSONL file with `botId`.
-- Atomic append for `store`.
-- In-memory index for recent keys after `init`.
-- Linear search is acceptable for initial implementation with bounded file size config.
-
-#### `hermes-proxy`
-
-Delegates recall to Hermes over HTTP.
-
-Behavior:
-
-- `store` sends records to configured Hermes memory endpoint when available.
-- `retrieve` maps key lookup to Hermes memory query if supported.
-- `search` calls Hermes `scope_recall`.
-- Timeouts, HTTP errors, and invalid Hermes responses are returned as memory errors but must not crash the bot worker.
-- Memory calls must include bot ID and configured scope.
-
-### Per-Bot Config
-
-```ts
-type MemoryProviderName = "none" | "file" | "hermes";
-
-interface BotMemoryConfig {
-  provider: MemoryProviderName;
-  scope?: string;
-  file?: {
-    path?: string;
-    maxBytes?: number;
-  };
-  hermes?: {
-    baseUrl: string;
-    apiKeyEnv?: string;
-    timeoutMs?: number;
-    scopeRecallPath?: string;
-  };
-}
-```
-
-Example:
-
-```json
-{
-  "memory": {
-    "provider": "hermes",
-    "scope": "minecraft.survival.bot-alpha",
-    "hermes": {
-      "baseUrl": "http://localhost:8787",
-      "apiKeyEnv": "HERMES_API_KEY",
-      "timeoutMs": 5000,
-      "scopeRecallPath": "/scope_recall"
-    }
-  }
-}
-```
+- **Now (v0.x)**: only `none` is effective. Interface + config reserved.
+- **Phase 7 (Roadmap §13)**: ship a `file` built-in provider. Add optional `sqlite`. Hook up to an external provider such as Hermes.
+- The external agent decides which events to persist, when to summarize, and when to recall.
 
 ## 8. Bot Lifecycle
 
@@ -1047,7 +1021,7 @@ interface BotConfig {
     checkTimeoutIntervalMs?: number;
   };
   reconnect: ReconnectPolicy;
-  memory: BotMemoryConfig;
+  // Note: no `memory` block in BotConfig (see §7). External agents handle persistence.
   modes: Record<string, boolean>;
   skills?: {
     disabled?: string[];
@@ -1087,7 +1061,7 @@ Required and supported environment variables:
 - `MC_AGENT_LOG_PRETTY`: pretty logs for local development.
 - `MC_AGENT_MAX_BOTS`: maximum bots in this service instance.
 - `MC_AGENT_WORKER_STOP_GRACE_MS`: worker graceful stop timeout.
-- `HERMES_API_KEY`: optional Hermes memory API key when referenced by bot config.
+- `HERMES_API_KEY`: removed — Hermes integration is on the agent side, not this service.
 
 Environment values must be parsed and validated through the same Zod config schemas as file config.
 
@@ -1163,11 +1137,7 @@ src/
     world.ts
     mcdata.ts
   optional/
-    memory/
-      MemoryProvider.ts
-      NoneMemoryProvider.ts
-      FileMemoryProvider.ts
-      HermesMemoryProvider.ts
+    // hooks/  (optional external memory hook plugins — see §7)
     planner/
     vision/
     viewer/
@@ -1234,3 +1204,28 @@ The first complete core should ship these skills:
 - `chat.send`
 
 These skills establish every required runtime capability: movement, mining, crafting, combat, inventory mutation, observation, communication, cancellation, progress, and event emission.
+
+## 13. Future: Roadmap Alignment
+
+This service implements the core body runtime, the brain-agnostic transport surface, and the mod-aware observation/action layer that lets an AI *play modpacks* (Mechanomania and similar). Full roadmap detail lives in `docs/ROADMAP_v2.md`. This section is the index.
+
+| Roadmap phase | Status | What it means here |
+|---|---|---|
+| Phase 0 — Repository hardening | **active (P0)** | Shipping P0 #1/3/4/5 + Action lanes + events replay. See `docs/STATUS.md`. |
+| Phase 1 — Brain-agnostic transport | **in place** | Goals §1 + REST/MCP/WS surface. No service-side change needed; adapter is just another client. |
+| Phase 2 — Core body runtime stability | **active** | Same as Phase 0 (different framing). |
+| Phase 3 — Mod-aware observation | **next** | New skills: `observe.recipe`, `observe.jade_look_at`, `observe.quest_progress`, `observe.guide_search`. Lands in this repo, in `src/skills/observation.ts` + `src/knowledge/`. |
+| Phase 4 — Mod-aware action | **next** | New skills targeting mod internals (Create, etc.). Same module. |
+| Phase 5 — Modpack knowledge indexer | **next** | Offline indexer over `mods/`, `kubejs/`, `config/`, `datapacks/`, `lang/`, `recipes/`, `tags/`, FTB Quests, Patchouli books. Lands in this repo as `src/knowledge/`. Output: `knowledge.sqlite`. Operator can run it once per modpack install. |
+| Phase 6 — Create early-game helper | **next** | Compositional skills built from primitives: `quest.read_step`, `recipe.ingredients`, `inventory.diff_to_recipe`, `collect_for_recipe`. |
+| Phase 7 — Memory providers | **reserved** | Spec §7.3 interface. v0.x ships `none`; built-in (`file`, optional `sqlite`) and `external` (Hermes-style HTTP proxy) land after the body runtime is stabilized. |
+| Phase 8 — AgentProbe Mod | **external** | A separate NeoForge mod that publishes JEI / Jade / FTB Quests / Patchouli internal state to a JSON surface the service can subscribe to. *Out of this repo* — improves the framework, but lives in its own repo. |
+| Phase 9 — Multi-brain / multi-bot | **deferred** | Multi-brain access today works (any client can drive the service). Multi-bot simultaneous coordination deferred to §13 of `ROADMAP_v2.md`. |
+| Phase 10 — Touhou Little Maid | **deferred** | Out of scope for the body-runtime path. Same body-vs-entity separation as roadmap notes. |
+
+The roadmap document `docs/ROADMAP_v2.md` carries the implementation plan and the open questions for each phase.
+
+See also:
+- `docs/STATUS.md` — current state + P0 status.
+- `docs/GPT0701review.md` (archived) — 2026-07-01 health check.
+- `docs/archive/GPT_roadmap.md` — original GPT-side roadmap draft.

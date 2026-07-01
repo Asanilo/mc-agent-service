@@ -254,6 +254,39 @@ Return data:
 
 Permissions: `movement`, `combat`.
 
+#### `move.to_entity`
+
+Navigate to an entity by type or ID. Added in Phase 2.
+
+```ts
+z.object({
+  entityType: z.string().min(1).optional(),
+  entityId: z.number().int().nonnegative().optional(),
+  minDistance: z.number().min(0.5).max(64).default(2)
+}).strict().refine(data => data.entityType !== undefined || data.entityId !== undefined)
+```
+
+Return data: `{ arrived: boolean; distance: number }`.
+
+Permissions: `movement`, `entity.interact`.
+
+#### `move.away`
+
+Move away from a target position (flee). Uses inverted pathfinder goal. Added in Phase 2.
+
+```ts
+z.object({
+  x: z.number().finite(),
+  y: z.number().finite(),
+  z: z.number().finite(),
+  distance: z.number().min(1).max(128).default(16)
+}).strict()
+```
+
+Return data: `{ fled: boolean; distance: number }`.
+
+Permissions: `movement`.
+
 ### Mining
 
 #### `mine.collect_blocks`
@@ -453,6 +486,41 @@ Return data:
 ```ts
 { equipped: boolean; itemName: string; slot?: "hand" | "off-hand" | "head" | "torso" | "legs" | "feet" }
 ```
+
+Permissions: `inventory`.
+
+#### `inventory.place_block`
+
+Place a block at specified coordinates, or auto-find the nearest free space adjacent to the bot. Added in Phase 2.
+
+```ts
+z.object({
+  blockType: z.string().min(1),
+  x: z.number().int().optional(),
+  y: z.number().int().optional(),
+  z: z.number().int().optional()
+}).strict()
+```
+
+If coordinates are omitted, the skill finds the nearest empty space and places the block there.
+
+Return data: `{ placed: boolean; position: Vec3; blockType: string }`.
+
+Permissions: `movement`, `inventory`, `block.place`.
+
+#### `inventory.consume`
+
+Eat or drink the best available food, or a specific food item. Added in Phase 2.
+
+```ts
+z.object({
+  itemName: z.string().optional()
+}).strict()
+```
+
+When `itemName` is omitted, the best available food is chosen by a built-in food-value table. Waits for the eating animation to complete.
+
+Return data: `{ consumed: boolean; itemName: string; foodLevel: number; saturation: number }`.
 
 Permissions: `inventory`.
 
@@ -698,6 +766,38 @@ Return data:
 ```ts
 { items: string[]; recipes?: CraftableRecipeSummary[] }
 ```
+
+Permissions: none.
+
+#### `observe.block_at`
+
+Return block info at a specific coordinate. Added in Phase 2.
+
+```ts
+z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  z: z.number().int()
+}).strict()
+```
+
+Return data: `{ name: string; displayName: string; position: Vec3; hardness: number; solid: boolean }`.
+
+Permissions: none.
+
+#### `observe.nearest_free_space`
+
+Find the nearest air block suitable for block placement. Added in Phase 2.
+
+```ts
+z.object({
+  maxDistance: z.number().int().min(1).max(64).default(16)
+}).strict()
+```
+
+Searches for air/cave_air blocks with a solid neighbor to place against.
+
+Return data: `{ position: Vec3 | null; distance: number }`.
 
 Permissions: none.
 

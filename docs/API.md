@@ -634,7 +634,7 @@ Status: `200 OK`
 
 ### GET /bots/{botId}
 
-Get bot details, redacted configuration, and current lifecycle metadata.
+Get bot details and current lifecycle metadata. Note: `config` is currently returned as an empty object (`{}`).
 
 **Request body schema**
 
@@ -665,6 +665,8 @@ Status: `200 OK`
 ### POST /bots/{botId}/start
 
 Start or reconnect a bot. If the bot is already running, this is idempotent.
+
+Note: `forceReconnect` and `reason` are accepted in the request body but not yet wired to the bot lifecycle.
 
 **Request body schema**
 
@@ -708,6 +710,8 @@ Status: `202 Accepted`
 ### POST /bots/{botId}/stop
 
 Stop a bot without deleting its record or configuration.
+
+Note: `cancelRunningJobs` is accepted in the request body but not yet wired — `cancelledJobIds` is always returned empty.
 
 **Request body schema**
 
@@ -1306,116 +1310,19 @@ Status: `200 OK` for synchronous send or `202 Accepted` for job-backed send.
 - `RATE_LIMITED`
 - `INTERNAL_ERROR`
 
-### POST /bots/{botId}/look
+### POST /bots/{botId}/look **(removed)**
 
-Look at an entity or an absolute position. This is a short direct worker command, not a primary skill job unless the implementation chooses to wrap it.
-
-**Request body schema**
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "target": {
-      "oneOf": [
-        {
-          "type": "object",
-          "properties": {
-            "type": { "type": "string", "const": "position" },
-            "position": { "$ref": "#/components/schemas/Vec3" }
-          },
-          "required": ["type", "position"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": { "type": "string", "const": "entity" },
-            "entityId": { "type": ["integer", "string"] }
-          },
-          "required": ["type", "entityId"],
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": { "type": "string", "const": "player" },
-            "username": { "type": "string", "minLength": 1 }
-          },
-          "required": ["type", "username"],
-          "additionalProperties": false
-        }
-      ]
-    },
-    "force": { "type": "boolean", "default": true }
-  },
-  "required": ["target"],
-  "additionalProperties": false
-}
-```
-
-**Response body schema**
-
-Status: `200 OK`
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "botId": { "type": "string" },
-    "looked": { "type": "boolean" },
-    "rotation": { "$ref": "#/components/schemas/Rotation" },
-    "updatedAt": { "$ref": "#/components/schemas/ISODateTime" }
-  },
-  "required": ["botId", "looked", "rotation", "updatedAt"],
-  "additionalProperties": false
-}
-```
-
-**Error codes**
-
-- `BOT_NOT_FOUND`
-- `BOT_NOT_CONNECTED`
-- `ENTITY_NOT_FOUND`
-- `LOOK_FAILED`
-- `VALIDATION_FAILED`
-- `AUTH_REQUIRED`, `AUTH_INVALID`, `AUTH_FORBIDDEN`
-- `RATE_LIMITED`
-- `INTERNAL_ERROR`
+This endpoint has been removed. Pitch control is handled by the `idle_staring` mode and `move` events at the Mineflayer adapter level.
 
 ### POST /bots/{botId}/observe
 
-Get a detailed read-only observation. This can be used when clients need a scoped snapshot instead of the entire cached `/state` payload.
+Get a read-only observation snapshot from the bot's cached state. Returns position, health, food, game mode, dimension, biome, time, weather, inventory, nearby entities/blocks, and current action status.
+
+Note: The `include`/`radius`/`blockNames`/`entityNames`/`limit` filtering parameters from the original spec are not yet implemented. The endpoint returns the full cached snapshot unconditionally.
 
 **Request body schema**
 
-```json
-{
-  "type": "object",
-  "properties": {
-    "include": {
-      "type": "array",
-      "items": {
-        "type": "string",
-        "enum": ["state", "position", "inventory", "nearby", "modes", "chat", "errors", "craftableItems", "biome", "time", "weather"]
-      },
-      "uniqueItems": true,
-      "default": ["state"]
-    },
-    "radius": { "type": "number", "minimum": 1, "maximum": 256, "default": 16 },
-    "blockNames": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "entityNames": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 }
-  },
-  "additionalProperties": false
-}
-```
+No request body is processed. (Filtering parameters are accepted but not yet applied.)
 
 **Response body schema**
 
@@ -1425,40 +1332,14 @@ Status: `200 OK`
 {
   "type": "object",
   "properties": {
-    "botId": { "type": "string" },
     "observation": {
       "type": "object",
       "properties": {
-        "state": { "$ref": "#/components/schemas/BotStateSnapshot" },
         "position": { "$ref": "#/components/schemas/Vec3" },
-        "inventory": { "$ref": "#/components/schemas/InventorySnapshot" },
-        "nearby": { "$ref": "#/components/schemas/NearbySnapshot" },
-        "modes": {
-          "type": "array",
-          "items": { "$ref": "#/components/schemas/ModeStatus" }
-        },
-        "chat": {
-          "type": "array",
-          "items": { "$ref": "#/components/schemas/ChatMessage" }
-        },
-        "errors": {
-          "type": "array",
-          "items": { "$ref": "#/components/schemas/ServiceErrorObject" }
-        },
-        "craftableItems": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "name": { "type": "string" },
-              "displayName": { "type": "string" },
-              "count": { "type": "integer", "minimum": 1 },
-              "requiresCraftingTable": { "type": "boolean" }
-            },
-            "required": ["name", "displayName", "count", "requiresCraftingTable"],
-            "additionalProperties": false
-          }
-        },
+        "health": { "type": "number" },
+        "food": { "type": "number" },
+        "gameMode": { "type": "string" },
+        "dimension": { "type": "string" },
         "biome": { "type": "string" },
         "time": {
           "type": "object",
@@ -1466,9 +1347,7 @@ Status: `200 OK`
             "timeOfDay": { "type": "integer" },
             "day": { "type": "integer" },
             "isDay": { "type": "boolean" }
-          },
-          "required": ["timeOfDay", "day", "isDay"],
-          "additionalProperties": false
+          }
         },
         "weather": {
           "type": "object",
@@ -1476,16 +1355,17 @@ Status: `200 OK`
             "isRaining": { "type": "boolean" },
             "rainState": { "type": "number" },
             "thunderState": { "type": "number" }
-          },
-          "required": ["isRaining", "rainState", "thunderState"],
-          "additionalProperties": false
-        }
+          }
+        },
+        "inventory": { "$ref": "#/components/schemas/InventorySnapshot" },
+        "nearby": { "$ref": "#/components/schemas/NearbySnapshot" },
+        "currentAction": { "type": "string" },
+        "busy": { "type": "boolean" }
       },
       "additionalProperties": false
-    },
-    "updatedAt": { "$ref": "#/components/schemas/ISODateTime" }
+    }
   },
-  "required": ["botId", "observation", "updatedAt"],
+  "required": ["observation"],
   "additionalProperties": false
 }
 ```
@@ -1493,8 +1373,6 @@ Status: `200 OK`
 **Error codes**
 
 - `BOT_NOT_FOUND`
-- `BOT_NOT_CONNECTED`
-- `VALIDATION_FAILED`
 - `SNAPSHOT_UNAVAILABLE`
 - `AUTH_REQUIRED`, `AUTH_INVALID`, `AUTH_FORBIDDEN`
 - `RATE_LIMITED`
@@ -1595,6 +1473,8 @@ Every server-to-client event uses this envelope:
 
 #### bot.kicked
 
+Note: This event schema is defined but not yet emitted over the WebSocket. The bot always reconnects on kick, so `willReconnect` is always `true`.
+
 ```json
 {
   "allOf": [
@@ -1690,7 +1570,7 @@ Every server-to-client event uses this envelope:
 
 #### state.changed
 
-Diff-based state event. `patch` uses JSON Patch operations from RFC 6902 against the previous `BotStateSnapshot`.
+Full-state snapshot event. Emits the complete `BotState` on every change. (JSON Patch / RFC 6902 diffing is not yet implemented.)
 
 ```json
 {
@@ -1701,29 +1581,7 @@ Diff-based state event. `patch` uses JSON Patch operations from RFC 6902 against
       "properties": {
         "type": { "const": "state.changed" },
         "botId": { "type": "string" },
-        "data": {
-          "type": "object",
-          "properties": {
-            "sequence": { "type": "integer", "minimum": 0 },
-            "patch": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "op": { "type": "string", "enum": ["add", "remove", "replace", "move", "copy", "test"] },
-                  "path": { "type": "string" },
-                  "from": { "type": "string" },
-                  "value": {}
-                },
-                "required": ["op", "path"],
-                "additionalProperties": false
-              }
-            },
-            "snapshot": { "$ref": "#/components/schemas/BotStateSnapshot" }
-          },
-          "required": ["sequence", "patch"],
-          "additionalProperties": false
-        }
+        "data": { "$ref": "#/components/schemas/BotState" }
       },
       "required": ["botId"]
     }
@@ -2173,6 +2031,8 @@ Result data: `{ "bot": BotDetail }`.
 #### stop_bot
 
 Stop a bot without destroying its record.
+
+Note: `cancelRunningJobs` is accepted but not yet wired — `cancelledJobIds` is always returned empty.
 
 Parameter schema:
 
@@ -2749,9 +2609,11 @@ Clients send:
 Authorization: Bearer <token>
 ```
 
-Secrets are never returned in API responses. Bot configuration responses redact `passwordEnv` values by preserving only the environment variable name.
+Secrets are never returned in API responses. Bot configuration responses redact `password` values. `GET /bots/{botId}` currently returns an empty `config` object; `POST /bots` returns the full config (redaction is not yet applied to the create response).
 
 ## 6. Rate Limiting
+
+Currently only chat rate limiting is implemented (`createChatRateLimitMiddleware`). General REST/WS/MCP rate limiting middlewares are not yet wired.
 
 Rate limiting is enabled per adapter and can be disabled for trusted local deployments. Limits are keyed by API key when authenticated, otherwise by remote address.
 

@@ -1,6 +1,6 @@
 # mc-agent-service 状态文档
 
-> 最后更新: 2026-06-26
+> 最后更新: 2026-07-01
 
 ## 项目概况
 
@@ -89,6 +89,31 @@
 | 8 | **MCP 对齐** | 中 | API.md 工具名与实现统一 |
 | 9 | **OpenAPI 输出** | 小 | 从 skill registry 自动生成 |
 | 10 | **Auth 加固** | 中 | MCP HTTP auth、config 脱敏、请求 ID |
+| 11 | **文档对齐** | 小 | 2026-07-01 已对齐 API.md/SKILLS.md/SPEC.md/ARCHITECTURE.md 与代码，详见下方 |
+
+### 📋 文档-代码对齐记录 (2026-07-01)
+
+已修复的文档差异：
+
+| 文档 | 修复内容 |
+|------|---------|
+| API.md | `state.changed` 从 JSON Patch 改为完整 BotState；observe 精简为实际返回值；POST /look 标记为已移除；stop/start 标注未实现参数；bot.kicked 标注未发出；rate limiting 标注仅 chat 已实现；config 脱敏说明更新 |
+| SKILLS.md | 添加 6 个缺失技能：`move.to_entity`, `move.away`, `inventory.place_block`, `inventory.consume`, `observe.block_at`, `observe.nearest_free_space` |
+| SPEC.md | 权限表从旧名（move/dig/place/attack/...）对齐为实际名（movement/block.break/block.place/combat/...）；MCP 工具名对齐 |
+| ARCHITECTURE.md | 标注持久化/插件加载/内存提供者/重连指数退避为未实现；rate limiting 标注仅 chat 已实现 |
+
+已知但未修（代码层面待做）：
+
+| # | 问题 |
+|---|------|
+| 1 | `state.changed` 应改为 JSON Patch diff（目前发完整 state） |
+| 2 | POST /stop 和 DELETE /bots 的 `cancelledJobIds` 始终返回 `[]` |
+| 3 | POST /start 的 `forceReconnect`/`reason` 参数未接入 |
+| 4 | GET /bots/:botId 返回空 config |
+| 5 | `bot.kicked` 事件 schema 已定义但未通过 WS 发出 |
+| 6 | observe 不支持 `include`/`radius`/`blockNames` 过滤参数 |
+| 7 | 认证中间件代码已存在但 MCP HTTP transport 未接入 |
+| 8 | 仅 chat 有 rate limit；通用 REST/WS/MCP rate limit 未实现 |
 
 ## 架构要点
 
@@ -115,3 +140,35 @@ AI = 大脑（决定做什么）
 | Worker 隔离 | ❌ | ✅ |
 | 类型安全 | ❌ JS | ✅ TS + Zod |
 | Fabric 模组兼容 | ❌ | ✅ 协议层无感知 |
+
+## Roadmap (high level)
+
+Detail in `docs/ROADMAP_v2.md`. SPEC §13 is the index.
+
+| Phase | Status | One-line |
+|---|---|---|
+| 0 Repository hardening (P0 #1/3/4/5 + lanes + replay) | **active** | Code change, tracked above |
+| 1 Brain-agnostic transport | **in place** | MCP/REST/WS; clients swap freely |
+| 2 Core body runtime stability | **active** | Same as Phase 0 |
+| 3 Mod-aware observation | **next** | `observe.recipe` / `observe.jade_look_at` / `observe.quest_*` / `observe.guide_*` |
+| 4 Mod-aware action | **next** | Create-aware craft/interact skills |
+| 5 Modpack knowledge indexer | **next** | Offline scan → `knowledge.sqlite` |
+| 6 Create early-game helper | **next** | Compositional skills over 3–5 |
+| 7 Memory providers | **reserved** | Spec §7.3 contract; only `none` ships |
+| 8 AgentProbe Mod | **external** | Separate NeoForge repo |
+| 9 Multi-brain / multi-bot | **deferred** | Multi-brain already works; multi-bot coordination not |
+| 10 Touhou Little Maid | **deferred** | Body-vs-entity split |
+
+## GPT Review P0 Status
+
+Source: `docs/GPT0701review.md` (2026-07-01 health check). Detailed P0 reasoning lives there.
+
+| # | P0 项 | 状态 | 备注 |
+|---|---|---|---|
+| 1 | MCP/Skill schema 漂移 | 待做 | 决策：**统一成 `distance` 字段**（覆盖 `move.to_position` 的 `minDistance`）。代码改动交给外部 agent。 |
+| 2 | Action lanes 实装 | 暂缓 | SPEC §9 / ARCHITECTURE §9 已设计接口（primary / observation / safety / system），代码未落地。Phase 4 TODO。 |
+| 3 | 长循环 skill cancel 语义 | 待做 | `move.follow_player` / `move.stay` / `move.avoid_enemies` 取消时返回 `success` 是错的，应返回 `{ ok: false, status: "cancelled" }`。代码改动交给外部 agent。 |
+| 4 | BotManager 捏造 failedJob | 待做 | `bot-manager.ts:354-383` 直接构造 fake Job 并 call `jobEventHandler`，违反 SPEC §3 "JobManager 是 job 生命周期 owner"。代码改动交给外部 agent。 |
+| 5 | 启动安全默认 | 待做 | `mc-agent-service.json` 默认 `0.0.0.0` + 无 auth；要求默认 `127.0.0.1`，显式 opt-in 0.0.0.0（`MCAGENT_ALLOW_INSECURE=1`）。代码改动交给外部 agent。 |
+
+P1 follow-ups (待办, 不在 P0 范围): `README.md` quickstart；prettier/eslint；Mineflayer 4.23→4.37 矩阵测试；events.jsonl replay。
