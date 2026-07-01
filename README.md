@@ -8,6 +8,26 @@ The service is the **body**: it executes structured skill commands and emits sta
 
 Pre-1.0. See `docs/STATUS.md` for what works today and `docs/SPEC.md` for the contract. Active work is tracked as P0 (Phase 0 / repo hardening) plus roadmap Phases 3–7 (mod-aware observation, action, knowledge indexer, Create helpers, memory providers).
 
+## Documentation map
+
+Start here:
+
+- `README.md` — quickstart and project orientation.
+- `docs/STATUS.md` — current implementation status, active P0 checklist, and known gaps.
+- `docs/ROADMAP_v2.md` — active implementation roadmap. This is the current plan.
+
+Contracts:
+
+- `docs/SPEC.md` — project goals, non-goals, and implementation contract.
+- `docs/API.md` — REST, WebSocket, and MCP API reference.
+- `docs/SKILLS.md` — skill catalog, parameters, permissions, and execution semantics.
+- `docs/ARCHITECTURE.md` — module boundaries, worker model, and data flow.
+- `docs/NORMAL_PLAYER_MODE.md` — no-OP / no-cheat policy for real-player modpack play.
+
+Archive:
+
+- `docs/archive/*` — historical GPT/Codex reviews and drafts. Keep for traceability, but do not treat them as current truth.
+
 ## Quickstart
 
 Requirements: Node.js (TypeScript), a local Minecraft server (vanilla recommended for first run).
@@ -78,20 +98,3 @@ Listen on `127.0.0.1` by default once P0 #5 (`docs/STATUS.md`) ships. Until then
 ## Connect any brain
 
 mc-agent-service is **brain-agnostic**: any LLM agent that speaks MCP, REST, or WebSocket can drive the bot. Swapping the brain does not require changing the service.
-
-- **MCP**: enable in `mc-agent-service.json` (`mcp.enabled: true`) and point your MCP client at the service (`stdio` transport during local dev, `http` for remote).
-- **REST**: `POST /bots/{id}/actions/{skill}` returns a job id; poll `GET /jobs/{id}` or subscribe to `WS /ws` for `job.*` events.
-- **WebSocket**: subscribe to `bot.*`, `chat.*`, `job.*`, `state.*` events.
-
-The catalog of exposed MCP tools and REST endpoints is in `docs/API.md`. Skill schemas are in `docs/SKILLS.md`.
-
-## Docs
-
-- `docs/SPEC.md` — implementation contract (single source of truth)
-- `docs/ARCHITECTURE.md` — module graph, data flows, event system, security model
-- `docs/SKILLS.md` — skill catalog with Zod schemas
-- `docs/API.md` — REST/WebSocket/MCP payload reference
-- `docs/STATUS.md` — current state + GPT review P0 status
-- `docs/ROADMAP_v2.md` — phased development plan (this revision: P0 hardening → modpack knowledge → memory providers)
-- `docs/archive/GPT_roadmap.md` — original GPT draft (kept for traceability)
-- `docs/archive/GPT0701review.md` — 2026-07-01 health check
