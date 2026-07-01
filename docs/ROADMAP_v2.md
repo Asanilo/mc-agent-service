@@ -113,14 +113,15 @@ Goal: the bot can interact with mod internals — search items in JEI, complete 
 | Skill | Notes |
 |---|---|
 | `craft.create_recipe(itemId, count?)` | Knows to use the right Create machine; uses `observe.recipe` first. |
-| `interact.jei_lookup(itemId)` | Open JEI's view (client-side packet, no GUI) and return metadata. |
+| `interact.jei_lookup(itemId)` | Query JEI-like metadata if supplied by the knowledge index or AgentProbe; otherwise returns `failed / JEI_UNAVAILABLE`. Mineflayer does not load the JEI client UI directly. |
 | `quest.complete_step(questId, taskId)` | Submit a step if the server has a non-cheat endpoint; otherwise returns `code: QUEST_STEP_BLOCKED`. |
-| `interact.patchouli_open(book, entry)` | Open a Patchouli page (client-side). |
+| `interact.patchouli_open(book, entry)` | Open a Patchouli page if AgentProbe or a client-side bridge is available; otherwise returns `failed / PATCHOULI_UI_UNAVAILABLE`. |
 
 ### Rules
 
 - These skills **must** run on the primary lane (`move.*` / `interact.*` etc.).
 - Each composes Phase 3 observation skills. No skill invents a recipe; if `observe.recipe` returns `unknown`, `craft.create_recipe` returns `failed / unknown_recipe`.
+- Client-mod UI actions must degrade gracefully. Without AgentProbe or a client-side bridge, they return a typed unavailable error instead of pretending Mineflayer can open the UI.
 
 Exit criteria:
 
@@ -246,18 +247,27 @@ Exit criteria:
 
 ## Phase 7 — Memory providers
 
-Goal: ship providers behind the §7.3 interface without breaking the brain-agnostic stance.
+Goal: ship memory providers behind a small contract without breaking the brain-agnostic stance.
+
+### Provider kinds
+
+| Provider kind | Meaning | Ships |
+|---|---|---|
+| `none` | No persistence and no outbound memory calls. | v0.x default |
+| `built_in` | Service-owned storage backends. Initial backends: JSONL file and SQLite. | Phase 7 |
+| `external` | HTTP forwarder to an external memory service, such as Hermes or another agent memory service. | Phase 7 |
 
 ### v0.x (now)
 
 - Provider kind `none` only.
-- Config schema accepts `built-in` and `external` keys but warns at startup.
+- The config surface may reserve `built_in` and `external`, but unsupported providers must fail clearly or warn at startup.
+- No built-in memory store ships before Phase 7.
 
 ### Phase 7 ships
 
-- **Built-in `file`**: JSONL append, one record per `MemoryHookEvent`.
-- **Built-in `sqlite`**: same events into SQLite, queryable by `(botId, type, ts)`.
-- **External**: HTTP forwarder. Implements POST with retries; respects rate limits; never blocks the primary lane.
+- **Built-in file backend**: JSONL append, one record per `MemoryHookEvent`.
+- **Built-in sqlite backend**: same events into SQLite, queryable by `(botId, type, ts)`.
+- **External HTTP backend**: POST with retries; respects rate limits; never blocks the primary lane.
 
 ### Coupling to action lanes
 
@@ -266,7 +276,7 @@ Goal: ship providers behind the §7.3 interface without breaking the brain-agnos
 
 Exit criteria:
 
-- A test fixture bot running for 1 hour produces a steady `memory.jsonl` and `memory.sqlite` of expected size.
+- A test fixture bot running for 1 hour produces a steady `memory.jsonl` and `memory.sqlite` of expected size when `built_in` is enabled.
 - Killing the upstream agent mid-session leaves the service still running, with no `JobManager` state corruption.
 
 ---
@@ -325,5 +335,6 @@ Two body models are different (player bot vs. TLM maid entity). The TLM body wou
 - `docs/SKILLS.md` — skill catalog
 - `docs/API.md` — transport reference
 - `docs/STATUS.md` — current state, P0 status
+- `docs/NORMAL_PLAYER_MODE.md` — no-OP / no-cheat player policy
 - `docs/archive/GPT_roadmap.md` — original GPT draft (kept for traceability)
 - `docs/archive/GPT0701review.md` — 2026-07-01 health check
