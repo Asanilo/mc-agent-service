@@ -22,9 +22,9 @@ mc-agent-service is the **body**. Any upstream LLM agent (Hermes, Codex, a local
 | 0 | Repository hardening | this | **done** |
 | 1 | Brain-agnostic transport | this | **done** |
 | 2 | Core body runtime stability | this | **done** |
-| 3 | Mod-aware observation | this | **done** |
-| 4 | Mod-aware action | this | **active — next** |
-| 5 | Modpack knowledge indexer | this | **next** |
+| 3 | Mod-aware observation | this | **partial / scaffold** |
+| 4 | Mod-aware action | this | **blocked — Phase 5 first** |
+| 5 | Modpack knowledge indexer | this | **active — next** |
 | 6 | Create early-game helper | this | **next** |
 | 7 | Memory providers | this | **reserved** |
 | 8 | AgentProbe Mod | **external** | spec-only |
@@ -78,7 +78,7 @@ Exit criteria:
 
 ## Phase 3 — Mod-aware observation
 
-✅ **Completed 2026-07-02.**
+⚠️ **Partial / scaffold complete 2026-07-02.** Consumer API surface ready; real data sources blocked on Phase 5.
 
 ### New skills (landed in `src/skills/observation.ts` + `src/knowledge/`)
 
@@ -99,14 +99,27 @@ Each skill reads from `src/knowledge/` (a thin cache layer). The knowledge layer
 Exit criteria:
 
 - Skill schemas defined in `docs/SKILLS.md`. ✅
-- Skills behave correctly when the knowledge layer is empty (degrade to "unknown" — never fabricate). ✅ (`EmptyKnowledgeProvider` returns null for every query; all skills return `found: false` / `available: false` with helpful messages)
-- Skills respect `Normal Player Mode` (no `/data`, no chunk-loaded bypass). ✅ (all skills use `bot.registry` and `bot.blockAt` only)
+- Skills degrade gracefully when knowledge layer is empty. ✅
+- Skills respect `Normal Player Mode`. ✅
+
+Remaining before Phase 3 is truly done:
+- SQLite-backed `KnowledgeProvider` (Phase 5)
+- Real data: JEI/Jade/Patchouli/FTB Quests index
+- Quest progress source (likely requires AgentProbe for per-player state, not only offline index)
+- Integration tests against Mechanomania
+
+Known caveats:
+- `observe.jade_look_at` returns vanilla block info — **not** real Jade/WTHIT mod tooltips unless AgentProbe is installed.
+- `observe.quest_progress` likely needs a runtime bridge (AgentProbe) because FTB Quests per-player state is not extractable from static files alone.
+- `observe.recipe_usage` brute-force scans the registry — may be slow in large modpacks.
 
 ---
 
 ## Phase 4 — Mod-aware action
 
-Goal: the bot can interact with mod internals — search items in JEI, complete quest steps, work with Create blocks — through structured skills.
+⛔ **Blocked — requires Phase 5 knowledge provider first.** Mod-aware actions
+depend on mod-aware observation returning real data; implementing them now
+would hardcode script-like behavior against an empty knowledge layer.
 
 ### New skills
 

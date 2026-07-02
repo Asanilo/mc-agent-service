@@ -21,7 +21,31 @@
 | P0 #3 | 长运行 skill 取消语义 | ✅ done (2026-07-02) | `move.follow_player`、`move.stay`、`move.avoid_enemies` 取消时返回 `ok:false,status:"cancelled"`。 |
 | P0 #4 | Worker crash job ownership | ✅ done (2026-07-02) | `BotManager` 只发 `workerDeadHandler` 回调；`JobManager.handleWorkerDeath()` 是 job 终态唯一入口。 |
 | P0 #5 | 安全默认值 | ✅ done (2026-07-02) | 默认 `127.0.0.1`；`0.0.0.0 + auth:none` 拒绝启动需 `MCAGENT_ALLOW_INSECURE=1`。 |
-| P0 #2 | Action Lanes | ✅ done (2026-07-02) | `LaneArbiter` 四通道仲裁；observation 技能与 primary 并行运行。 |
+| P0 #2 | Action Lanes | ⚠️ partial (2026-07-02) | `LaneArbiter` 已定义四通道；primary/observation/system 已实现；safety lane 由 ModeEngine 管理（未在 LaneArbiter 中仲裁）。 |
+
+### Phase 3 detail — mod-aware observation (partial)
+
+**Done:**
+- 7 consumer skills registered and documented in SKILLS.md
+- `KnowledgeProvider` interface defined in `src/knowledge/index.ts`
+- `EmptyKnowledgeProvider` — all methods return `null`/`[]`; skills degrade gracefully
+- `observe.recipe` / `observe.recipe_usage` queries `bot.recipesFor()` as fallback
+- `observe.jade_look_at` queries `bot.blockAt()` as fallback (Jade-style, NOT real Jade)
+- `observe.mod_info` scans `bot.registry` namespace as fallback
+- All skills return `found: false` / `available: false` when data unavailable — never fabricates
+
+**Not done:**
+- SQLite-backed knowledge provider (Phase 5)
+- Modpack indexer — `mc-agent-knowledge index` CLI (Phase 5)
+- Real JEI/Jade/Patchouli/FTB Quests data source
+- Quest progress source — FTB Quests per-player state likely requires runtime bridge (AgentProbe), not only offline index
+- Integration tests against Mechanomania
+
+**Known limitations:**
+- `observe.recipe_usage` brute-force scans `itemsByName` → slow in large modpacks
+- `observe.jade_look_at` is vanilla block info, not real Jade/WTHIT mod tooltips
+- `observe.mod_info` registry namespace scan unreliable for mods with vanilla-style item names
+- `observe.quest_progress` returns `available:false` without knowledge layer
 
 ### Phase 1 & 2 completed (2026-07-02)
 
@@ -185,7 +209,7 @@ Detail in `docs/ROADMAP_v2.md`. SPEC §13 is the index.
 | 0 Repository hardening (P0 #1/3/4/5 + lanes + replay) | **active** | Code change, tracked above |
 | 1 Brain-agnostic transport | **in place** | MCP/REST/WS; clients swap freely |
 | 2 Core body runtime stability | **active** | Same as Phase 0 |
-| 3 Mod-aware observation | ✅ done (2026-07-02) | 7 new skills: `observe.recipe`, `recipe_usage`, `jade_look_at`, `quest_progress`, `quest_tree`, `guide_search`, `mod_info` + `src/knowledge/` layer |
+| 3 Mod-aware observation | ⚠️ partial / scaffold complete (2026-07-02) | Consumer skills + KnowledgeProvider interface ready; EmptyKnowledgeProvider fallback; missing SQLite provider, modpack indexer, real data sources (see below) |
 | 4 Mod-aware action | **next** | Create-aware craft/interact skills |
 | 5 Modpack knowledge indexer | **next** | Offline scan → `knowledge.sqlite` |
 | 6 Create early-game helper | **next** | Compositional skills over 3–5 |
