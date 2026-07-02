@@ -35,7 +35,7 @@ const ToPositionSchema = z.object({
   x: z.number().finite(),
   y: z.number().finite(),
   z: z.number().finite(),
-  minDistance: z.number().min(0).max(64).default(2),
+  distance: z.number().min(0).max(64).default(2),
 }).strict();
 
 export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> = {
@@ -49,7 +49,7 @@ export const moveToPosition: SkillDefinition<z.infer<typeof ToPositionSchema>> =
   parameters: ToPositionSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { x, y, z, minDistance: distance } = params;
+    const { x, y, z, distance } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Moving to ${x}, ${y}, ${z}` });
 
@@ -189,7 +189,6 @@ export const moveFollowPlayer: SkillDefinition<z.infer<typeof FollowPlayerSchema
     ctx.progress({ current: 0, target: 1, unit: "following", message: `Following ${username}` });
     ctx.log(`Now following player ${username} at distance ${distance}`);
 
-    let cancelled = false;
     while (!checkCancelled(ctx)) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       // Re-check player entity still exists
@@ -206,13 +205,8 @@ export const moveFollowPlayer: SkillDefinition<z.infer<typeof FollowPlayerSchema
 
     // Cleanup on cancellation
     bot.pathfinder.stop();
-    cancelled = true;
 
-    return {
-      ok: true,
-      status: "success",
-      data: { following: true, username, cancelled },
-    };
+    return { ok: false, status: "cancelled", message: "Movement cancelled" };
   },
 };
 
@@ -241,7 +235,6 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
     ctx.progress({ current: 0, target: seconds === -1 ? 1 : seconds, unit: "seconds", message: "Staying in place" });
 
     const start = Date.now();
-    let interrupted = false;
 
     while (!checkCancelled(ctx)) {
       if (seconds !== -1) {
@@ -252,17 +245,17 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
+    bot.pathfinder.stop();
+
     if (checkCancelled(ctx)) {
-      interrupted = true;
+      return { ok: false, status: "cancelled", message: "Movement cancelled" };
     }
 
     const stayedSeconds = Math.round((Date.now() - start) / 1000);
-    bot.pathfinder.stop();
-
     return {
       ok: true,
       status: "success",
-      data: { stayedSeconds, interrupted },
+      data: { stayedSeconds, interrupted: false },
     };
   },
 };
@@ -271,7 +264,7 @@ export const moveStay: SkillDefinition<z.infer<typeof StaySchema>> = {
 
 const ToBlockSchema = z.object({
   blockType: z.string().min(1),
-  minDistance: z.number().min(0).max(64).default(2),
+  distance: z.number().min(0).max(64).default(2),
   range: z.number().int().min(1).max(512).default(64),
 }).strict();
 
@@ -286,7 +279,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
   parameters: ToBlockSchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { blockType, minDistance: arrivalDistance, range: distance } = params;
+    const { blockType, distance: arrivalDistance, range: searchRange } = params;
 
     ctx.progress({ current: 0, target: 1, unit: "navigation", message: `Searching for ${blockType}` });
 
@@ -295,21 +288,21 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
     if (blockType === "water" || blockType === "lava") {
       blocks = bot.findBlocks({
         matching: (block) => block.name === blockType && (block as any).metadata === 0,
-        maxDistance: distance,
+        maxDistance: searchRange,
         count: 1,
       });
       if (blocks.length === 0) {
         // Fall back to any flowing block
         blocks = bot.findBlocks({
           matching: (block) => block.name === blockType,
-          maxDistance: distance,
+          maxDistance: searchRange,
           count: 1,
         });
       }
     } else {
       blocks = bot.findBlocks({
         matching: (block) => block.name === blockType,
-        maxDistance: distance,
+        maxDistance: searchRange,
         count: 1,
       });
     }
@@ -318,7 +311,7 @@ export const moveToBlock: SkillDefinition<z.infer<typeof ToBlockSchema>> = {
       return {
         ok: false,
         status: "failed",
-        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${distance} blocks`, retryable: true },
+        error: { code: "TARGET_NOT_FOUND", message: `Could not find any ${blockType} within ${searchRange} blocks`, retryable: true },
       };
     }
 
@@ -396,9 +389,13 @@ export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema
     ctx.progress({ current: 0, target: 1, unit: "fleeing", message: "Avoiding enemies" });
 
     let avoided = false;
+    let wasCancelled = false;
     const MAX_ITERATIONS = 20;
     for (let i = 0; i < MAX_ITERATIONS; i++) {
-      if (checkCancelled(ctx)) break;
+      if (checkCancelled(ctx)) {
+        wasCancelled = true;
+        break;
+      }
 
       // Find ALL hostiles within range
       const hostiles = Object.values(bot.entities).filter(
@@ -434,6 +431,10 @@ export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema
 
     bot.pathfinder.stop();
 
+    if (wasCancelled) {
+      return { ok: false, status: "cancelled", message: "Movement cancelled" };
+    }
+
     const enemiesRemaining = Object.values(bot.entities).filter(
       (e) => e.name !== undefined && HOSTILE_NAMES.has(e.name) &&
         bot.entity.position.distanceTo(e.position) < distance
@@ -454,7 +455,7 @@ export const moveAvoidEnemies: SkillDefinition<z.infer<typeof AvoidEnemiesSchema
 const ToEntitySchema = z.object({
   entityType: z.string().min(1).optional(),
   entityId: z.number().int().nonnegative().optional(),
-  minDistance: z.number().min(0.5).max(64).default(2),
+  distance: z.number().min(0.5).max(64).default(2),
 }).strict().refine((data) => data.entityType !== undefined || data.entityId !== undefined, {
   message: "Must provide either entityType or entityId",
 });
@@ -470,7 +471,7 @@ export const moveToEntity: SkillDefinition<z.infer<typeof ToEntitySchema>> = {
   parameters: ToEntitySchema,
   async run(ctx, params) {
     const bot = ctx.bot;
-    const { entityType, entityId, minDistance } = params;
+    const { entityType, entityId, distance } = params;
 
     let target: import("prismarine-entity").Entity | undefined;
 
@@ -512,7 +513,7 @@ export const moveToEntity: SkillDefinition<z.infer<typeof ToEntitySchema>> = {
     bot.pathfinder.setMovements(movements);
 
     try {
-      await bot.pathfinder.goto(new goals.GoalFollow(target, minDistance));
+      await bot.pathfinder.goto(new goals.GoalFollow(target, distance));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       if (checkCancelled(ctx)) {
@@ -533,7 +534,7 @@ export const moveToEntity: SkillDefinition<z.infer<typeof ToEntitySchema>> = {
       ok: true,
       status: "success",
       data: {
-        reached: dist <= minDistance + 1,
+        reached: dist <= distance + 1,
         entity: { name: target.name, id: target.id },
         distance: Math.round(dist * 10) / 10,
       },

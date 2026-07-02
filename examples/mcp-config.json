@@ -1,0 +1,24 @@
+{
+  "//": "Claude Code / Cursor / VS Code MCP configuration for mc-agent-service.",
+  "//_usage": "Copy this into your MCP config file (~/.claude/mcp.json, .cursor/mcp.json, etc.)",
+  "//_stdio": "For stdio transport (service runs as a child process):",
+  "mcpServers": {
+    "mc-agent": {
+      "command": "npx",
+      "args": ["tsx", "src/index.ts"],
+      "cwd": "/path/to/mc-agent-service",
+      "env": {
+        "MCAGENT_MCP_ENABLED": "true",
+        "MCAGENT_MCP_TRANSPORT": "stdio"
+      }
+    }
+  },
+  "//_http": "For HTTP transport (service runs independently on localhost):",
+  "//_mcpServers_http": {
+    "mc-agent": {
+      "url": "http://127.0.0.1:3001/mcp",
+      "transport": "http"
+    }
+  },
+  "//_tools": "Available MCP tools: create_bot, stop_bot, send_chat, get_state, move.to_position, move.follow_player, mine.collect_blocks, craft.item, cancel_job"
+}

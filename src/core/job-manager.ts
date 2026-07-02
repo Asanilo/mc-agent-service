@@ -300,6 +300,38 @@ export class JobManager {
     return { ...job };
   }
 
+  // ── Worker death handling ──────────────────────────────────────────────
+
+  /**
+   * Called by BotManager when a worker exits unexpectedly while a job is running.
+   * JobManager is the sole owner of job terminal state.
+   */
+  handleWorkerDeath(botId: string, jobId: string, exitCode: number): void {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      this.logger.warn({ botId, jobId, exitCode }, "Worker died but job not found in registry");
+      return;
+    }
+
+    if (job.state !== "running") {
+      this.logger.warn({ jobId, state: job.state, exitCode }, "Worker died but job not in running state");
+      return;
+    }
+
+    const error: JobError = {
+      code: "WORKER_CRASH",
+      message: `Worker exited with code ${exitCode}`,
+      retryable: true,
+    };
+
+    this.transitionJob(job, "failed");
+    job.error = error;
+    this.emitJobEvent("job.failed", job, { error });
+    this.dispatchNextInQueue(botId);
+
+    this.logger.info({ botId, jobId, exitCode }, "Worker death handled by JobManager");
+  }
+
   // ── Worker event handling (called by BotManager or external wiring) ────
 
   /**

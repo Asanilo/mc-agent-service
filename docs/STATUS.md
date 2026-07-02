@@ -17,11 +17,16 @@
 
 | ID | 项目 | 状态 | 说明 |
 |---|------|------|------|
-| P0 #1 | `distance` / `minDistance` 统一 | active | `move.*` skills 与 MCP wrapper 统一使用 `distance`；必要时保留兼容 alias。 |
-| P0 #3 | 长运行 skill 取消语义 | active | `move.follow_player`、`move.stay`、`move.avoid_enemies` 等 abort 时必须返回 `ok:false,status:"cancelled"`。 |
-| P0 #4 | Worker crash job ownership | active | `BotManager` 不再伪造 failed job；只发 `worker_dead`，由 `JobManager` 统一处理终态。 |
-| P0 #5 | 安全默认值 | active | 默认 `127.0.0.1`；`0.0.0.0 + auth:none` 需 `MCAGENT_ALLOW_INSECURE=1`。 |
-| P0 #2 | Action Lanes | post-P0 | primary / observation / safety / system 仲裁层，P0 #1/#3/#4/#5 后做。 |
+| P0 #1 | `distance` / `minDistance` 统一 | ✅ done (2026-07-02) | `move.*` skills 与 MCP wrapper 统一使用 `distance`；`ToPositionSchema` / `ToBlockSchema` / `ToEntitySchema` 全部改为 `distance`。 |
+| P0 #3 | 长运行 skill 取消语义 | ✅ done (2026-07-02) | `move.follow_player`、`move.stay`、`move.avoid_enemies` 取消时返回 `ok:false,status:"cancelled"`。 |
+| P0 #4 | Worker crash job ownership | ✅ done (2026-07-02) | `BotManager` 只发 `workerDeadHandler` 回调；`JobManager.handleWorkerDeath()` 是 job 终态唯一入口。 |
+| P0 #5 | 安全默认值 | ✅ done (2026-07-02) | 默认 `127.0.0.1`；`0.0.0.0 + auth:none` 拒绝启动需 `MCAGENT_ALLOW_INSECURE=1`。 |
+| P0 #2 | Action Lanes | ✅ done (2026-07-02) | `LaneArbiter` 四通道仲裁；observation 技能与 primary 并行运行。 |
+
+### Phase 1 & 2 completed (2026-07-02)
+
+- **Phase 1** — brain-agnostic transport: README updated with runnable examples for REST/WebSocket/MCP. `examples/` directory with 3 clients.
+- **Phase 2** — runtime stability: `BotManager.reconnectBot()` uses exponential backoff with jitter (per `ReconnectPolicy`). All 35 skills verified for cleanup correctness.
 
 ## Memory provider 计划
 
@@ -30,7 +35,7 @@ Memory provider 采用三层枚举思路：
 | Provider | 含义 | 状态 |
 |---|---|---|
 | `none` | 不持久化、不外发记忆事件 | v0.x 默认 |
-| `built_in` | 服务内置持久化后端，如 file / sqlite | Phase 7 |
+| `built-in` | 服务内置持久化后端，如 file / sqlite | Phase 7 |
 | `external` | 外部记忆服务，如 Hermes HTTP adapter 或其他 agent memory service | Phase 7 |
 
 原则：memory provider 不参与动作执行，不阻塞 primary lane，不因为记忆失败影响 bot 生存或 job 状态。
@@ -180,11 +185,11 @@ Detail in `docs/ROADMAP_v2.md`. SPEC §13 is the index.
 | 0 Repository hardening (P0 #1/3/4/5 + lanes + replay) | **active** | Code change, tracked above |
 | 1 Brain-agnostic transport | **in place** | MCP/REST/WS; clients swap freely |
 | 2 Core body runtime stability | **active** | Same as Phase 0 |
-| 3 Mod-aware observation | **next** | `observe.recipe` / `observe.jade_look_at` / `observe.quest_*` / `observe.guide_*` |
+| 3 Mod-aware observation | ✅ done (2026-07-02) | 7 new skills: `observe.recipe`, `recipe_usage`, `jade_look_at`, `quest_progress`, `quest_tree`, `guide_search`, `mod_info` + `src/knowledge/` layer |
 | 4 Mod-aware action | **next** | Create-aware craft/interact skills |
 | 5 Modpack knowledge indexer | **next** | Offline scan → `knowledge.sqlite` |
 | 6 Create early-game helper | **next** | Compositional skills over 3–5 |
-| 7 Memory providers | **reserved** | Provider kinds: `none` / `built_in` / `external` |
+| 7 Memory providers | **reserved** | Provider kinds: `none` / `built-in` / `external` |
 | 8 AgentProbe Mod | **external** | Separate NeoForge repo |
 | 9 Multi-brain / multi-bot | **deferred** | Multi-brain already works; multi-bot coordination not |
 | 10 Touhou Little Maid | **deferred** | Body-vs-entity split |

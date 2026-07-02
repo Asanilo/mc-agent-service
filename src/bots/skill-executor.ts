@@ -200,6 +200,100 @@ export class SkillExecutor {
     }
   }
 
+  // ── Execute an observation skill (parallel-safe, does not consume primary slot) ─
+
+  async executeObservationSkill(
+    name: string,
+    params: unknown,
+    bot: Bot,
+    mcData: IndexedData,
+    botId: string,
+    jobId: string,
+    config: Readonly<BotConfig>,
+    onProgress: (report: SkillProgressReport) => void,
+    timeoutMs?: number,
+  ): Promise<SkillResult> {
+    const skill = this.registry.get(name);
+    if (!skill) {
+      return makeErrorResult("SKILL_NOT_FOUND", `Skill "${name}" not found`, false);
+    }
+
+    // Check if disabled in bot config
+    const disabledSkills = config.skills?.disabled;
+    if (disabledSkills?.includes(name)) {
+      return makeErrorResult("SKILL_DISABLED", `Skill "${name}" is disabled`, false);
+    }
+
+    // Check permissions
+    const permDenied = checkPermissions(skill, config);
+    if (permDenied) {
+      return makeErrorResult("PERMISSION_DENIED", permDenied, false);
+    }
+
+    // Validate params with Zod
+    const parsed = skill.parameters.safeParse(params);
+    if (!parsed.success) {
+      return makeErrorResult(
+        "VALIDATION_FAILED",
+        `Invalid parameters: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+        false,
+      );
+    }
+
+    // Separate controller — does NOT overwrite primary currentController/currentJobId
+    const controller = new AbortController();
+    const effectiveTimeout = timeoutMs ?? skill.timeoutMs;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+
+    const logs: string[] = [];
+    const startedAt = new Date().toISOString();
+
+    const ctx: SkillExecutionContext = {
+      bot,
+      mcData,
+      botId,
+      jobId,
+      signal: controller.signal,
+      config,
+      modes: null as unknown as ModeEngine, // observation skills have no permissions — modes not needed
+      progress: onProgress,
+      log: (message, _fields) => {
+        logs.push(message);
+      },
+    };
+
+    try {
+      if (effectiveTimeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          controller.abort();
+        }, effectiveTimeout);
+      }
+
+      const result: SkillResult = await skill.run(ctx, parsed.data);
+
+      const finishedAt = new Date().toISOString();
+      return {
+        ...result,
+        output: logs.length > 0 ? logs : result.output,
+        metrics: {
+          startedAt,
+          finishedAt,
+          durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
+        },
+      };
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return makeCancelledResult(
+          `Skill "${name}" was cancelled: ${controller.signal.reason ?? "no reason"}`,
+        );
+      }
+      const errStr = err instanceof Error ? err.message : String(err);
+      return makeErrorResult("MINEFLAYER_ERROR", errStr, true);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  }
+
   // ── Cancel current skill ────────────────────────────────────────────────
 
   cancelCurrent(reason?: string): boolean {

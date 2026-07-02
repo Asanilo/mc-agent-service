@@ -1,6 +1,7 @@
 import { parentPort } from "node:worker_threads";
 import { BotRuntime } from "./bot-runtime.js";
 import { registerAllSkills } from "../skills/index.js";
+import { LaneArbiter } from "./lane-arbiter.js";
 import type { BotConfig } from "../types/bot.js";
 import {
   WorkerCommandSchema,
@@ -18,14 +19,19 @@ import type { Job } from "../types/jobs.js";
 // via parentPort.on('message'), dispatches them to a BotRuntime instance,
 // and sends WorkerEvents back via parentPort.postMessage.
 //
+// Action lanes (per SPEC §9.2):
+//   - PRIMARY lane: one-at-a-time world-mutating skills with a FIFO queue.
+//   - OBSERVATION lane: read-only skills that run in parallel with PRIMARY.
+//   - SAFETY lane: ModeEngine background modes.
+//   - SYSTEM lane: lifecycle commands (disconnect, destroy) — preempts all.
+//
 // Graceful shutdown: listens for 'destroy' and 'disconnect' commands and
 // exits cleanly after cleanup.
 
 let runtime: BotRuntime | null = null;
 let botConfig: BotConfig | null = null;
 let shuttingDown = false;
-let skillRunning = false;
-const skillQueue: Array<{ jobId: string; skill: string; params: unknown; timeoutMs?: number }> = [];
+const laneArbiter = new LaneArbiter();
 
 // ─── Message handler ────────────────────────────────────────────────────────
 
@@ -95,6 +101,7 @@ async function handleConnect(config: BotConfig): Promise<void> {
     if (runtime) {
       // Cancel any active skill first
       runtime.skillExecutor.cancelCurrent("reconnect");
+      laneArbiter.resetAll();
       try {
         await runtime.adapter.destroy("reconnect");
       } catch {
@@ -242,6 +249,7 @@ async function handleDisconnect(reason?: string): Promise<void> {
 
 async function handleDestroy(reason?: string): Promise<void> {
   shuttingDown = true;
+  laneArbiter.emergencyStop();
   if (runtime) {
     try {
       await runtime.destroy(reason ?? "destroyed");
@@ -278,25 +286,38 @@ async function handleRunSkill(
     return;
   }
 
-  // Enforce one-primary-action: queue if a skill is already running
-  if (skillRunning) {
-    skillQueue.push({ jobId, skill, params, timeoutMs });
+  const skillDef = runtime.skillExecutor.getSkill(skill);
+  const isObservation = skillDef?.readOnly === true;
+
+  if (isObservation) {
+    // ── OBSERVATION lane: run in parallel, no queue ──
+    laneArbiter.startObservation();
+    runtime.runObservation(skill, params, jobId, timeoutMs)
+      .catch((err) => {
+        sendWorkerError("OBSERVATION_FAILED", err);
+      })
+      .finally(() => {
+        laneArbiter.endObservation();
+      });
     return;
   }
 
-  skillRunning = true;
+  // ── PRIMARY lane: one-at-a-time with FIFO queue ──
+  if (!laneArbiter.acquirePrimary()) {
+    laneArbiter.enqueuePrimary({ jobId, skill, params, timeoutMs });
+    return;
+  }
 
-  // Run skill and handle errors that escape the runtime's own error handling
   runtime.runSkill(skill, params, jobId, timeoutMs).catch((err) => {
     sendWorkerError("RUNSKILL_FAILED", err);
   }).finally(() => {
-    skillRunning = false;
-    drainSkillQueue();
+    laneArbiter.releasePrimary();
+    drainPrimaryQueue();
   });
 }
 
-function drainSkillQueue(): void {
-  const next = skillQueue.shift();
+function drainPrimaryQueue(): void {
+  const next = laneArbiter.dequeuePrimary();
   if (!next) return;
   void handleRunSkill(next.jobId, next.skill, next.params, next.timeoutMs);
 }

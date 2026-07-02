@@ -51,6 +51,7 @@ async function main(): Promise<void> {
   const botManager = new BotManager({ serverConfig: config, eventBus, logger });
   const jobManager = new JobManager({ eventBus, botManager, logger });
   botManager.setJobEventHandler((event) => jobManager.handleWorkerEvent(event));
+  botManager.setWorkerDeadHandler((botId, jobId, exitCode) => jobManager.handleWorkerDeath(botId, jobId, exitCode));
 
   // 4. Create API-layer services
   const skillRegistry = new SkillRegistry();

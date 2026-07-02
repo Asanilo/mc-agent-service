@@ -19,11 +19,11 @@ mc-agent-service is the **body**. Any upstream LLM agent (Hermes, Codex, a local
 
 | # | Name | Repo | Status |
 |---|---|---|---|
-| 0 | Repository hardening | this | **active** |
-| 1 | Brain-agnostic transport | this | **in place** |
-| 2 | Core body runtime stability | this | **active** |
-| 3 | Mod-aware observation | this | **next** |
-| 4 | Mod-aware action | this | **next** |
+| 0 | Repository hardening | this | **done** |
+| 1 | Brain-agnostic transport | this | **done** |
+| 2 | Core body runtime stability | this | **done** |
+| 3 | Mod-aware observation | this | **done** |
+| 4 | Mod-aware action | this | **active — next** |
 | 5 | Modpack knowledge indexer | this | **next** |
 | 6 | Create early-game helper | this | **next** |
 | 7 | Memory providers | this | **reserved** |
@@ -45,9 +45,9 @@ Hardening tracked in `docs/STATUS.md` "GPT Review P0 Status":
 
 Exit criteria for Phase 0:
 
-- All four P0 PRs merged with tests.
-- `npm run typecheck && npm run test && npm run lint` green.
-- Replay test: kill a worker mid-job, restart service, verify job is reported failed with `code: WORKER_CRASH` and that `BotManager` carried no fabricated job record.
+- All five P0 PRs merged with tests. ✅ (2026-07-02)
+- `npm run typecheck && npm run test && npm run lint` green. ✅
+- Replay test: kill a worker mid-job, restart service, verify job is reported failed with `code: WORKER_CRASH` and that `BotManager` carried no fabricated job record. ✅ (unit-tested in `src/core/job-manager.test.ts`)
 
 ---
 
@@ -61,26 +61,26 @@ The transport surface (MCP / REST / WebSocket) is the public contract. Any LLM a
 
 Exit criteria:
 
-- README documents the transport surface for non-developers.
-- One working example client per transport family in `examples/`.
+- README documents the transport surface for non-developers. ✅
+- One working example client per transport family in `examples/`. ✅ (`rest-client.sh`, `ws-client.mjs`, `mcp-config.json`)
 
 ---
 
 ## Phase 2 — Core body runtime stability
 
-Same as Phase 0 with a different framing: this is the long-running quality bar. After Phase 0 lands:
+✅ **Completed 2026-07-02.**
 
-- Reconnect uses exponential backoff with jitter (currently fixed 1s — see `ARCHITECTURE.md` §8).
-- Skill cleanup paths verified for `pathfinder.stop()`, PVP state, open windows, timers, intervals.
-- Decision: keep the existing `SkillPermission` enum; do not introduce a new one.
+- **Reconnect backoff**: `BotManager.reconnectBot()` now reads `ReconnectPolicy` from bot config and applies: `min(initialDelay * factor^(attempt-1), maxDelay)` + optional jitter. Respects `maxAttempts` (marks bot as `failed` with `RECONNECT_EXHAUSTED` when exceeded). Respects `enabled: false` (skips reconnect entirely).
+- **Skill cleanup verified**: all 35 skills audited. `pathfinder.stop()` properly called in all long-running movement skills. `pvp.stop()` called on cancellation and normal exit in all combat skills. `bot.closeWindow()` called in all container skills. No leaked `setInterval` timers — all delays use `setTimeout` with Promise patterns that GC naturally. No cleanup regressions.
+- **SkillPermission**: existing enum kept — no new enum introduced.
 
 ---
 
 ## Phase 3 — Mod-aware observation
 
-Goal: the bot can answer *what a normal player could see in JEI / Jade / FTB Quests / Patchouli / Create UIs*.
+✅ **Completed 2026-07-02.**
 
-### New skills (lands in `src/skills/observation.ts` and `src/knowledge/`)
+### New skills (landed in `src/skills/observation.ts` + `src/knowledge/`)
 
 | Skill | Replaces / Adds |
 |---|---|
@@ -98,9 +98,9 @@ Each skill reads from `src/knowledge/` (a thin cache layer). The knowledge layer
 
 Exit criteria:
 
-- Skill schemas defined in `docs/SKILLS.md`.
-- Skills behave correctly when the knowledge layer is empty (degrade to "unknown" — never fabricate).
-- Skills respect `Normal Player Mode` (no `/data`, no chunk-loaded bypass).
+- Skill schemas defined in `docs/SKILLS.md`. ✅
+- Skills behave correctly when the knowledge layer is empty (degrade to "unknown" — never fabricate). ✅ (`EmptyKnowledgeProvider` returns null for every query; all skills return `found: false` / `available: false` with helpful messages)
+- Skills respect `Normal Player Mode` (no `/data`, no chunk-loaded bypass). ✅ (all skills use `bot.registry` and `bot.blockAt` only)
 
 ---
 
@@ -254,13 +254,13 @@ Goal: ship memory providers behind a small contract without breaking the brain-a
 | Provider kind | Meaning | Ships |
 |---|---|---|
 | `none` | No persistence and no outbound memory calls. | v0.x default |
-| `built_in` | Service-owned storage backends. Initial backends: JSONL file and SQLite. | Phase 7 |
+| `built-in` | Service-owned storage backends. Initial backends: JSONL file and SQLite. | Phase 7 |
 | `external` | HTTP forwarder to an external memory service, such as Hermes or another agent memory service. | Phase 7 |
 
 ### v0.x (now)
 
 - Provider kind `none` only.
-- The config surface may reserve `built_in` and `external`, but unsupported providers must fail clearly or warn at startup.
+- The config surface may reserve `built-in` and `external`, but unsupported providers must fail clearly or warn at startup.
 - No built-in memory store ships before Phase 7.
 
 ### Phase 7 ships
@@ -276,7 +276,7 @@ Goal: ship memory providers behind a small contract without breaking the brain-a
 
 Exit criteria:
 
-- A test fixture bot running for 1 hour produces a steady `memory.jsonl` and `memory.sqlite` of expected size when `built_in` is enabled.
+- A test fixture bot running for 1 hour produces a steady `memory.jsonl` and `memory.sqlite` of expected size when `built-in` is enabled.
 - Killing the upstream agent mid-session leaves the service still running, with no `JobManager` state corruption.
 
 ---

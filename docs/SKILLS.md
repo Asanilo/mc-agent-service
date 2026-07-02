@@ -801,6 +801,111 @@ Return data: `{ position: Vec3 | null; distance: number }`.
 
 Permissions: none.
 
+#### `observe.recipe`
+
+Look up the crafting recipe for an item by ID or display name. Added in Phase 3.
+Queries Mineflayer's built-in recipe registry first, then falls back to the knowledge database for mod recipes. Returns `found: false` when neither source has data — never fabricates.
+
+```ts
+z.object({
+  itemId: z.string().min(1)
+}).strict()
+```
+
+Return data: `{ found: boolean; item: string; source: "vanilla"|"knowledge"; ingredients: {item:string,count:number}[]; machine: string|null; outputCount: number; modId?: string }`.
+
+Permissions: none.
+
+#### `observe.recipe_usage`
+
+Reverse recipe lookup — find recipes that use this item as an ingredient. Added in Phase 3.
+Scans both vanilla and knowledge-layer recipes. Capped at 50 results.
+
+```ts
+z.object({
+  itemId: z.string().min(1)
+}).strict()
+```
+
+Return data: `{ item: string; count: number; usages: {outputItem:string,outputCount:number,source:string}[] }`.
+
+Permissions: none.
+
+#### `observe.jade_look_at`
+
+Return block metadata at a position, in the style of the Jade/HWYLA mod tooltip. Added in Phase 3.
+Uses Mineflayer's `bot.blockAt()` for vanilla data; the knowledge layer provides Jade-style tooltips for modded blocks.
+
+```ts
+z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  z: z.number().int()
+}).strict()
+```
+
+Return data: `{ found: boolean; source: "vanilla"|"knowledge"; name: string; displayName: string; modId: string; hardness: number; harvestTools: string[]; tooltip: string[] }`.
+
+Permissions: none.
+
+#### `observe.quest_progress`
+
+Get current FTB Quest chapter and active task list. Added in Phase 3.
+Entirely knowledge-layer dependent — returns `available: false` when no quest data is loaded.
+
+```ts
+z.object({}).strict()
+```
+
+Return data: `{ available: boolean; chapter?: string; chapterTitle?: string; activeTasks?: QuestTask[]; completedTasks?: number; totalTasks?: number }`.
+
+Permissions: none.
+
+#### `observe.quest_tree`
+
+Get the full quest tree, capped by depth (default 3, max 5). Added in Phase 3.
+
+```ts
+z.object({
+  depth: z.number().int().min(1).max(5).default(3)
+}).strict()
+```
+
+Return data: `{ available: boolean; depth: number; tree?: QuestNode }`.
+
+Permissions: none.
+
+#### `observe.guide_search`
+
+Search Patchouli-style guide books. Added in Phase 3.
+Knowledge-layer dependent; returns empty results when no guide data is loaded.
+
+```ts
+z.object({
+  query: z.string().min(1),
+  maxResults: z.number().int().min(1).max(20).default(5)
+}).strict()
+```
+
+Return data: `{ query: string; count: number; results: {id:string,book:string,title:string,text:string,linkedItems:string[],modId:string}[] }`.
+
+Permissions: none.
+
+#### `observe.mod_info`
+
+Get metadata summary for a mod by ID. Added in Phase 3.
+Queries the knowledge layer first; falls back to counting items/blocks in the Mineflayer registry for that mod's namespace.
+
+```ts
+z.object({
+  modId: z.string().min(1)
+}).strict()
+```
+
+Return data: `{ found: boolean; source: "knowledge"|"registry"; modId: string; displayName: string; version: string; itemCount: number; blockCount: number; description: string }`.
+
+Permissions: none.
+
 ### Communication
 
 #### `chat.send`

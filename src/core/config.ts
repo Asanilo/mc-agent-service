@@ -25,7 +25,7 @@ const SECRET_KEYS = new Set(["token", "tokenEnv", "passwordEnv", "keyEnv"]);
 
 const DEFAULTS: ServerConfig = {
   http: {
-    host: "0.0.0.0",
+    host: "127.0.0.1",
     port: 3000,
   },
   websocket: {
@@ -101,6 +101,25 @@ function redactSecrets(obj: unknown): unknown {
   return out;
 }
 
+// ── Security check ──────────────────────────────────────────────────────────
+
+/**
+ * Validate that the service is not exposed to all network interfaces
+ * without authentication. Returns an error string if the configuration
+ * is insecure, or null if it passes.
+ */
+export function checkInsecureConfig(httpHost: string, authMode: string, allowInsecureEnv: string | undefined): string | null {
+  const bindsWildcard = httpHost === "0.0.0.0" || httpHost === "::";
+  if (bindsWildcard && authMode === "none" && allowInsecureEnv !== "1") {
+    return (
+      `Refusing to start with host=${httpHost} and auth=none.\n` +
+      `This exposes the service to all network interfaces with no authentication.\n` +
+      `Set MCAGENT_ALLOW_INSECURE=1 to override, or use 127.0.0.1, or enable auth.`
+    );
+  }
+  return null;
+}
+
 // ─── LoadConfig ────────────────────────────────────────────────────────────
 
 export interface LoadConfigOptions {
@@ -154,6 +173,16 @@ export async function loadConfig(
       .map((i) => `  ${i.path.join(".")}: ${i.message}`)
       .join("\n");
     throw new Error(`Invalid configuration:\n${issues}`);
+  }
+
+  // 5. Security check: refuse insecure wildcard-bind configurations
+  const insecureError = checkInsecureConfig(
+    result.data.http.host,
+    result.data.auth.mode,
+    process.env["MCAGENT_ALLOW_INSECURE"],
+  );
+  if (insecureError) {
+    throw new Error(insecureError);
   }
 
   return new ConfigFacade(result.data);

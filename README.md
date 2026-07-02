@@ -93,8 +93,63 @@ Module dependency rule: Control Plane never imports Mineflayer. Only Bot Runtime
 
 ## Security defaults
 
-Listen on `127.0.0.1` by default once P0 #5 (`docs/STATUS.md`) ships. Until then, the bundled config binds `0.0.0.0` — set host to `127.0.0.1` in `mc-agent-service.json` for local development, or set `MCAGENT_ALLOW_INSECURE=1` only if you need LAN exposure and accept the implications.
+The service listens on `127.0.0.1` by default. Binding to `0.0.0.0` or `::` (all interfaces) with `auth.mode=none` is refused at startup unless `MCAGENT_ALLOW_INSECURE=1` is set. To expose the service on a network, either:
+
+- Enable auth (`bearer` or `api-key` mode), or
+- Set `MCAGENT_ALLOW_INSECURE=1` (accepting the risk).
 
 ## Connect any brain
 
 mc-agent-service is **brain-agnostic**: any LLM agent that speaks MCP, REST, or WebSocket can drive the bot. Swapping the brain does not require changing the service.
+
+### REST — any HTTP client
+
+```bash
+# Submit a movement skill
+curl -X POST http://127.0.0.1:3001/bots/<botId>/actions/move.to_position \
+  -H "Content-Type: application/json" \
+  -d '{"params":{"x":0,"y":64,"z":0,"distance":2}}'
+
+# Read state
+curl http://127.0.0.1:3001/bots/<botId>/state
+
+# Cancel a running job
+curl -X POST http://127.0.0.1:3001/jobs/<jobId>/cancel \
+  -H "Content-Type: application/json" -d '{}'
+```
+
+### WebSocket — real-time event stream
+
+```js
+const ws = new WebSocket("ws://127.0.0.1:3001/ws");
+ws.on("message", (data) => {
+  const event = JSON.parse(data);
+  // event.type: "state.changed" | "job.completed" | "chat.received" | ...
+});
+```
+
+### MCP — Claude Code, Cursor, Codex, any MCP client
+
+```json
+{
+  "mcpServers": {
+    "mc-agent": {
+      "command": "npx", "args": ["tsx", "src/index.ts"],
+      "cwd": "/path/to/mc-agent-service",
+      "env": { "MCAGENT_MCP_ENABLED": "true", "MCAGENT_MCP_TRANSPORT": "stdio" }
+    }
+  }
+}
+```
+
+Once connected, the agent sees tools: `create_bot`, `stop_bot`, `send_chat`, `get_state`, `move.to_position`, `move.follow_player`, `mine.collect_blocks`, `craft.item`, `cancel_job`.
+
+### Runnable examples
+
+See `examples/` for fully worked, runnable clients:
+
+| Transport | File | Requires |
+|-----------|------|----------|
+| REST | `examples/rest-client.sh` | `curl`, `bash` |
+| WebSocket | `examples/ws-client.mjs` | `npm install ws` |
+| MCP | `examples/mcp-config.json` | Claude Code / Cursor / Codex |

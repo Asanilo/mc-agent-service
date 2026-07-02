@@ -161,6 +161,56 @@ export class BotRuntime {
     }
   }
 
+  // ── Run an observation skill (parallel — does not block the primary lane) ──
+
+  async runObservation(
+    skill: string,
+    params: unknown,
+    jobId: string,
+    timeoutMs?: number,
+  ): Promise<SkillResult> {
+    if (!this.connected || !this.botConfig) {
+      const error = {
+        code: "BOT_NOT_READY",
+        message: "Bot is not connected",
+        retryable: false,
+      };
+      this.eventCallbacks.jobFailed?.(jobId, error);
+      return { ok: false, status: "failed", error };
+    }
+
+    const bot = this.adapter.getBot();
+    const mcData = this.adapter.getMcData();
+
+    const result = await this.skillExecutor.executeObservationSkill(
+      skill,
+      params,
+      bot,
+      mcData,
+      this.botConfig.id ?? this.botConfig.name,
+      jobId,
+      this.botConfig,
+      (report) => {
+        this.eventCallbacks.jobProgress?.(jobId, report);
+      },
+      timeoutMs,
+    );
+
+    if (result.ok) {
+      this.eventCallbacks.jobComplete?.(jobId, result);
+    } else if (result.status === "cancelled") {
+      this.eventCallbacks.jobCancelled?.(jobId, result.error?.message ?? "cancelled");
+    } else {
+      this.eventCallbacks.jobFailed?.(jobId, {
+        code: result.error?.code ?? "SKILL_FAILED",
+        message: result.error?.message ?? "Skill failed",
+        retryable: result.error?.retryable ?? false,
+      });
+    }
+
+    return result;
+  }
+
   // ── Cancel a job ────────────────────────────────────────────────────────
 
   cancelJob(jobId: string, reason?: string): boolean {

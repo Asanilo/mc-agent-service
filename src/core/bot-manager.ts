@@ -65,6 +65,7 @@ export class BotManager {
   private readonly destroyWaiters = new Map<string, () => void>();
   private readonly destroyTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
   private jobEventHandler: ((event: WorkerEvent) => void) | null = null;
+  private workerDeadHandler: ((botId: string, jobId: string, exitCode: number) => void) | null = null;
 
   constructor(opts: BotManagerOptions) {
     this.serverConfig = opts.serverConfig;
@@ -79,6 +80,14 @@ export class BotManager {
    */
   setJobEventHandler(handler: (event: WorkerEvent) => void): void {
     this.jobEventHandler = handler;
+  }
+
+  /**
+   * Register a handler called when a worker exits unexpectedly while a job is running.
+   * JobManager uses this to transition the job to failed with WORKER_CRASH.
+   */
+  setWorkerDeadHandler(handler: (botId: string, jobId: string, exitCode: number) => void): void {
+    this.workerDeadHandler = handler;
   }
 
   // ── Create ─────────────────────────────────────────────────────────────
@@ -237,7 +246,8 @@ export class BotManager {
   }
 
   /**
-   * Request reconnection for a bot.
+   * Request reconnection for a bot. Uses exponential backoff with jitter
+   * from the bot's reconnect policy (per SPEC §8 / ARCHITECTURE.md §8).
    */
   reconnectBot(id: string): void {
     const record = this.requireBot(id);
@@ -246,18 +256,57 @@ export class BotManager {
       throw new BotManagerError("BOT_DESTROYED", `Bot ${id} is ${record.status}`);
     }
 
-    this.sendCommand(id, { type: "disconnect", reason: "reconnect requested" });
-    // The worker will transition to disconnected, and we'll re-connect.
-    // We schedule the re-connect after a short delay.
+    const policy = record.config.reconnect;
+
+    // If reconnection is explicitly disabled, don't reconnect
+    if (policy?.enabled === false) {
+      this.logger.info({ botId: id }, "Reconnection disabled by policy — not reconnecting");
+      return;
+    }
+
+    // Check max attempts
     record.reconnectAttempts++;
+    if (policy?.maxAttempts !== undefined && record.reconnectAttempts > policy.maxAttempts) {
+      this.logger.warn(
+        { botId: id, attempts: record.reconnectAttempts, maxAttempts: policy.maxAttempts },
+        "Max reconnection attempts reached — marking bot as failed",
+      );
+      record.lastError = {
+        code: "RECONNECT_EXHAUSTED",
+        message: `Exceeded max reconnect attempts (${policy.maxAttempts})`,
+        retryable: false,
+      };
+      this.updateStatus(id, "failed");
+      return;
+    }
+
+    // Calculate delay with exponential backoff + optional jitter
+    const initialDelay = policy?.initialDelayMs ?? 1000;
+    const maxDelay = policy?.maxDelayMs ?? 60000;
+    const factor = policy?.factor ?? 2;
+    const useJitter = policy?.jitter ?? true;
+
+    let delay = initialDelay * Math.pow(factor, record.reconnectAttempts - 1);
+    delay = Math.min(delay, maxDelay);
+    if (useJitter) {
+      delay = delay + Math.random() * delay;
+    }
+    delay = Math.round(delay);
+
+    this.sendCommand(id, { type: "disconnect", reason: "reconnect requested" });
     this.updateStatus(id, "reconnecting");
+
+    this.logger.info(
+      { botId: id, attempt: record.reconnectAttempts, delayMs: delay },
+      "Reconnect scheduled with exponential backoff",
+    );
 
     setTimeout(() => {
       if (this.bots.has(id) && record.status === "reconnecting") {
         this.sendCommand(id, { type: "connect", botConfig: record.config });
         this.updateStatus(id, "connecting");
       }
-    }, 1000);
+    }, delay);
   }
 
   /**
@@ -346,40 +395,12 @@ export class BotManager {
       }
 
       if (record.status !== "destroyed" && record.status !== "stopping") {
-        // Unexpected exit — fail any active job
+        // Unexpected exit — notify JobManager so it can fail any active job
         if (record.currentJobId) {
           const jobId = record.currentJobId;
-          const now = new Date().toISOString();
           record.busy = false;
           record.currentJobId = undefined;
-          const failedJob = {
-            id: jobId,
-            botId: record.id,
-            skill: "",
-            state: "failed" as const,
-            timeoutMs: 0,
-            retry: { maxAttempts: 1, backoffMs: 0, retryOn: [] as string[] },
-            createdAt: now,
-            startedAt: now,
-          };
-          const failedError = { code: "WORKER_CRASH", message: `Worker exited with code ${code}`, retryable: true };
-          this.eventBus.emit({
-            type: "job.failed",
-            botId: record.id,
-            jobId,
-            data: {
-              job: failedJob,
-              error: failedError,
-            },
-          } as any);
-          // Notify JobManager directly so it transitions job state and dispatches queued jobs
-          this.jobEventHandler?.({
-            type: "jobFailed",
-            botId: record.id,
-            jobId,
-            job: failedJob,
-            error: failedError,
-          });
+          this.workerDeadHandler?.(record.id, jobId, code);
         }
 
         // Unexpected exit — classify

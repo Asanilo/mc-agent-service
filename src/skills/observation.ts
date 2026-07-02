@@ -517,6 +517,454 @@ export const observeNearestFreeSpace: SkillDefinition<z.infer<typeof NearestFree
   },
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 3 — Mod-aware observation skills
+// ════════════════════════════════════════════════════════════════════════════
+
+import { getKnowledgeProvider } from "../knowledge/index.js";
+
+// ─── observe.recipe ─────────────────────────────────────────────────────
+
+const ObserveRecipeSchema = z.object({
+  itemId: z.string().min(1),
+}).strict();
+
+export const observeRecipe: SkillDefinition<z.infer<typeof ObserveRecipeSchema>> = {
+  name: "observe.recipe",
+  description: "Look up the crafting recipe for an item by ID or display name.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 10000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: ObserveRecipeSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { itemId } = params;
+    const knowledge = getKnowledgeProvider();
+
+    // 1. Try Mineflayer's built-in recipe lookup
+    const item = bot.registry.itemsByName[itemId]
+      ?? Object.values(bot.registry.itemsByName).find((i: any) => i.name === itemId || i.displayName === itemId);
+
+    if (item) {
+      try {
+        const recipes = bot.recipesFor((item as any).id, null, 1, null);
+        if (recipes && recipes.length > 0) {
+          const recipe = recipes[0]!;
+          const ingredients = (recipe.ingredients ?? []).map((ing: any) => ({
+            item: bot.registry.items[ing.id]?.name ?? `item_${ing.id}`,
+            count: ing.count,
+          }));
+          return {
+            ok: true,
+            status: "success",
+            data: {
+              found: true,
+              source: "vanilla",
+              item: itemId,
+              outputCount: recipe.result?.count ?? 1,
+              ingredients,
+              machine: null,
+            },
+          };
+        }
+      } catch {
+        // Recipe lookup failed — fall through to knowledge layer
+      }
+    }
+
+    // 2. Try knowledge layer (mod recipes)
+    const modRecipe = knowledge.getRecipe(itemId);
+    if (modRecipe) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          found: true,
+          source: "knowledge",
+          item: modRecipe.outputItem,
+          outputCount: modRecipe.outputCount,
+          ingredients: modRecipe.ingredients,
+          machine: modRecipe.machine,
+          modId: modRecipe.modId,
+        },
+      };
+    }
+
+    // 3. Unknown
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        found: false,
+        item: itemId,
+        message: "Recipe not available. The knowledge database may not be loaded for this modpack.",
+      },
+    };
+  },
+};
+
+// ─── observe.recipe_usage ──────────────────────────────────────────────
+
+const ObserveRecipeUsageSchema = z.object({
+  itemId: z.string().min(1),
+}).strict();
+
+export const observeRecipeUsage: SkillDefinition<z.infer<typeof ObserveRecipeUsageSchema>> = {
+  name: "observe.recipe_usage",
+  description: "Find recipes that use this item as an ingredient.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 15000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: ObserveRecipeUsageSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { itemId } = params;
+    const knowledge = getKnowledgeProvider();
+
+    const usages: Array<{ outputItem: string; outputCount: number; source: string }> = [];
+
+    // 1. Scan vanilla recipes for usage
+    try {
+      const item = bot.registry.itemsByName[itemId]
+        ?? Object.values(bot.registry.itemsByName).find((i: any) => i.name === itemId || i.displayName === itemId);
+      if (item) {
+        const itemIdNum = (item as any).id;
+        for (const [name, candidate] of Object.entries(bot.registry.itemsByName)) {
+          try {
+            const recipes = bot.recipesFor((candidate as any).id, null, 1, null);
+            if (recipes && recipes.length > 0) {
+              for (const recipe of recipes) {
+                const usesItem = recipe.ingredients?.some((ing: any) => ing.id === itemIdNum);
+                if (usesItem) {
+                  usages.push({
+                    outputItem: name,
+                    outputCount: recipe.result?.count ?? 1,
+                    source: "vanilla",
+                  });
+                }
+              }
+            }
+          } catch {
+            // skip
+          }
+        }
+      }
+    } catch {
+      // vanilla scan failed
+    }
+
+    // 2. Try knowledge layer
+    const modUsages = knowledge.getRecipeUsage(itemId);
+    for (const r of modUsages) {
+      usages.push({
+        outputItem: r.outputItem,
+        outputCount: r.outputCount,
+        source: "knowledge",
+      });
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        item: itemId,
+        count: usages.length,
+        usages: usages.slice(0, 50), // cap
+      },
+    };
+  },
+};
+
+// ─── observe.jade_look_at ───────────────────────────────────────────────
+
+const JadeLookAtSchema = z.object({
+  x: z.number().int(),
+  y: z.number().int(),
+  z: z.number().int(),
+}).strict();
+
+export const observeJadeLookAt: SkillDefinition<z.infer<typeof JadeLookAtSchema>> = {
+  name: "observe.jade_look_at",
+  description: "Return block info at a position, Jade-style.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 5000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: JadeLookAtSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { x, y, z } = params;
+    const knowledge = getKnowledgeProvider();
+    const dimension = (bot as any).game?.dimension ?? "overworld";
+
+    // 1. Built-in block data from Mineflayer
+    const block = bot.blockAt(new Vec3(x, y, z));
+    if (!block || block.name === "air" || block.name === "cave_air") {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          found: false,
+          position: { x, y, z },
+          message: "No solid block at this position",
+        },
+      };
+    }
+
+    const baseInfo = {
+      name: block.name,
+      displayName: block.displayName ?? block.name,
+      hardness: block.hardness ?? -1,
+      harvestTools: block.harvestTools
+        ? Object.entries(block.harvestTools as Record<string, boolean>)
+            .filter(([, v]) => v)
+            .map(([k]) => k)
+        : [],
+    };
+
+    // 2. Try knowledge layer for Jade-style tooltip
+    const jadeInfo = knowledge.getBlockInfo(x, y, z, dimension);
+    if (jadeInfo) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          found: true,
+          source: "knowledge",
+          ...jadeInfo,
+        },
+      };
+    }
+
+    // 3. Fall back to vanilla block info
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        found: true,
+        source: "vanilla",
+        ...baseInfo,
+        modId: block.name.includes(":") ? block.name.split(":")[0]! : "minecraft",
+        harvestLevel: null,
+        tooltip: [
+          `Name: ${baseInfo.displayName}`,
+          `Hardness: ${baseInfo.hardness}`,
+          baseInfo.harvestTools.length > 0 ? `Tool: ${baseInfo.harvestTools.join(", ")}` : "No special tool required",
+        ],
+      },
+    };
+  },
+};
+
+// ─── observe.quest_progress ─────────────────────────────────────────────
+
+const ObserveQuestProgressSchema = z.object({}).strict();
+
+export const observeQuestProgress: SkillDefinition<z.infer<typeof ObserveQuestProgressSchema>> = {
+  name: "observe.quest_progress",
+  description: "Get current FTB Quest chapter and active task list.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 5000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: ObserveQuestProgressSchema,
+  async run(_ctx, _params) {
+    const knowledge = getKnowledgeProvider();
+    const progress = knowledge.getQuestProgress();
+
+    if (!progress) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          available: false,
+          message: "Quest data not available. The knowledge database may not be loaded for this modpack.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        available: true,
+        ...progress,
+      },
+    };
+  },
+};
+
+// ─── observe.quest_tree ─────────────────────────────────────────────────
+
+const ObserveQuestTreeSchema = z.object({
+  depth: z.number().int().min(1).max(5).default(3),
+}).strict();
+
+export const observeQuestTree: SkillDefinition<z.infer<typeof ObserveQuestTreeSchema>> = {
+  name: "observe.quest_tree",
+  description: "Get the full quest tree, capped by depth.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 5000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: ObserveQuestTreeSchema,
+  async run(_ctx, params) {
+    const knowledge = getKnowledgeProvider();
+    const tree = knowledge.getQuestTree(params.depth);
+
+    if (!tree) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          available: false,
+          message: "Quest tree not available. The knowledge database may not be loaded for this modpack.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        available: true,
+        depth: params.depth,
+        tree,
+      },
+    };
+  },
+};
+
+// ─── observe.guide_search ───────────────────────────────────────────────
+
+const ObserveGuideSearchSchema = z.object({
+  query: z.string().min(1),
+  maxResults: z.number().int().min(1).max(20).default(5),
+}).strict();
+
+export const observeGuideSearch: SkillDefinition<z.infer<typeof ObserveGuideSearchSchema>> = {
+  name: "observe.guide_search",
+  description: "Search Patchouli-style guide books.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 10000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: ObserveGuideSearchSchema,
+  async run(_ctx, params) {
+    const knowledge = getKnowledgeProvider();
+    const entries = knowledge.searchGuide(params.query);
+
+    if (entries.length === 0) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          query: params.query,
+          count: 0,
+          results: [],
+          message: "No guide entries found. The knowledge database may not be loaded for this modpack.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        query: params.query,
+        count: entries.length,
+        results: entries.slice(0, params.maxResults),
+      },
+    };
+  },
+};
+
+// ─── observe.mod_info ───────────────────────────────────────────────────
+
+const ObserveModInfoSchema = z.object({
+  modId: z.string().min(1),
+}).strict();
+
+export const observeModInfo: SkillDefinition<z.infer<typeof ObserveModInfoSchema>> = {
+  name: "observe.mod_info",
+  description: "Get metadata summary for a mod by ID.",
+  category: "observation",
+  permissions: [],
+  timeoutMs: 5000,
+  busyPolicy: "queue",
+  readOnly: true,
+  parameters: ObserveModInfoSchema,
+  async run(ctx, params) {
+    const bot = ctx.bot;
+    const { modId } = params;
+    const knowledge = getKnowledgeProvider();
+
+    // 1. Try knowledge layer
+    const modInfo = knowledge.getModInfo(modId);
+    if (modInfo) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          found: true,
+          source: "knowledge",
+          modId: modInfo.modId,
+          displayName: modInfo.displayName,
+          version: modInfo.version,
+          itemCount: modInfo.itemCount,
+          blockCount: modInfo.blockCount,
+          description: modInfo.description,
+        },
+      };
+    }
+
+    // 2. Fall back to basic registry scan
+    const modItems = Object.entries(bot.registry.itemsByName).filter(([name]) =>
+      name.startsWith(`${modId}:`)
+    );
+    const modBlocks = Object.entries(bot.registry.blocksByName ?? {}).filter(([name]: [string, unknown]) =>
+      name.startsWith(`${modId}:`)
+    );
+
+    if (modItems.length === 0 && modBlocks.length === 0) {
+      return {
+        ok: true,
+        status: "success",
+        data: {
+          found: false,
+          modId,
+          message: "No items or blocks found for this mod in the current registry. The knowledge database may provide more detail.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      status: "success",
+      data: {
+        found: true,
+        source: "registry",
+        modId,
+        displayName: modId,
+        version: "unknown",
+        itemCount: modItems.length,
+        blockCount: modBlocks.length,
+        description: `${modItems.length} items, ${modBlocks.length} blocks registered`,
+      },
+    };
+  },
+};
+
+// ─── Export all observation skills ────────────────────────────────────────
+
 export const observationSkills = [
   observeState,
   observeInventory,
@@ -526,4 +974,12 @@ export const observationSkills = [
   observeCraftable,
   observeBlockAt,
   observeNearestFreeSpace,
+  // Phase 3 — mod-aware observation
+  observeRecipe,
+  observeRecipeUsage,
+  observeJadeLookAt,
+  observeQuestProgress,
+  observeQuestTree,
+  observeGuideSearch,
+  observeModInfo,
 ];
